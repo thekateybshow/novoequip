@@ -155,9 +155,8 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
         <label>Employee</label>
         <select id="scan-emp"><option value="">Select employee...</option></select>
       </div>
-      <div class="field">
-        <label>Job number</label>
-        <input type="text" id="scan-job" placeholder="e.g. JOB-001">
+      <div class="field" style="display:none">
+        <input type="text" id="scan-job" value="">
       </div>
     </div>
     <div class="scan-box" id="scan-trigger" onclick="startScan()">
@@ -301,9 +300,9 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
 
 <script>
 // ─── Config ────────────────────────────────────────────────────────────────
-var GIST_ID = '31146b6834d702ae0aef6729b336eefe';
-var GIST_TOKEN_STORED = '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';
-var ADMIN_PASSWORD = 'novos2024';
+var GIST_ID = '';        // Filled in after first setup
+var GIST_TOKEN_STORED = ''; // Filled in after first setup
+var ADMIN_PASSWORD = 'novos2024'; // Change this to your own password
 var GIST_TOKEN = '';
 var IS_ADMIN = false;
 
@@ -528,10 +527,9 @@ function processCode(code) {
   var job = document.getElementById('scan-job').value.trim();
   if (item.status === 'in') {
     if (!emp) { alert('Please select an employee first.'); return; }
-    if (!job) { alert('Please enter a job number.'); return; }
-    pendingAction = { type: 'out', item: item, emp: emp, job: job };
+    pendingAction = { type: 'out', item: item, emp: emp, job: '—' };
     document.getElementById('conf-title').textContent = 'Check out item';
-    document.getElementById('conf-body').innerHTML = 'Check out <strong>' + esc(item.name) + '</strong> to <strong>' + esc(emp) + '</strong> on job <strong>' + esc(job) + '</strong>?';
+    document.getElementById('conf-body').innerHTML = 'Check out <strong>' + esc(item.name) + '</strong> to <strong>' + esc(emp) + '</strong>?';
     document.getElementById('conf-btn').textContent = 'Check out';
     document.getElementById('conf-btn').className = 'btn danger';
     document.getElementById('modal-confirm').classList.add('open');
@@ -767,6 +765,8 @@ function renderItems() {
 function delItem(idx) {
   var item = db.items[parseInt(idx)];
   if (!item) return;
+  var pw = prompt('Enter admin password to delete this item:');
+  if (!pw || pw !== ADMIN_PASSWORD) { alert('Incorrect password. Item not deleted.'); return; }
   var bookingCount = db.bookings.filter(function(b) { return b.itemId === item.id && b.status === 'active'; }).length;
   var msg = '⚠️ DELETE ITEM: ' + item.name + '\n\n'
     + 'This will permanently delete this item and ALL its data.\n';
@@ -801,6 +801,8 @@ function renderEmps() {
 function delEmp(idx) {
   var emp = db.employees[parseInt(idx)];
   if (!emp) return;
+  var pw = prompt('Enter admin password to remove this employee:');
+  if (!pw || pw !== ADMIN_PASSWORD) { alert('Incorrect password. Employee not removed.'); return; }
   var hasItems = db.items.filter(function(i) { return i.employee === emp.name; }).length;
   var hasBookings = db.bookings.filter(function(b) { return b.employee === emp.name && b.status === 'active'; }).length;
   var msg = '⚠️ REMOVE EMPLOYEE: ' + emp.name + '\n\nThis will permanently remove this employee.\n';
