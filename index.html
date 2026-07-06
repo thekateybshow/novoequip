@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Equipment Tracker">
+<title>Equipment Tracker</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,Helvetica,sans-serif;background:#f2f2f2;color:#1a1a1a;min-height:100vh}
+.app{max-width:700px;margin:0 auto;padding:12px}
+.header{background:#1a1a1a;color:#fff;border-radius:12px;padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}
+.header-title{font-size:18px;font-weight:700}
+.header-sub{font-size:12px;color:#aaa;margin-top:2px}
+.sync-row{display:flex;align-items:center;gap:8px}
+.sync-dot{width:9px;height:9px;border-radius:50%;background:#555;flex-shrink:0}
+.sync-dot.ok{background:#27ae60}.sync-dot.err{background:#c0392b}.sync-dot.busy{background:#f39c12;animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.sync-lbl{font-size:11px;color:#aaa;font-weight:700}
+.btn-sync{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);color:#fff;border-radius:7px;padding:5px 10px;font-size:12px;font-family:Arial,sans-serif;cursor:pointer;font-weight:700}
+.tabs{display:flex;gap:3px;background:#e0e0e0;border-radius:10px;padding:4px;margin-bottom:12px}
+.tab{flex:1;padding:8px 2px;border:none;background:transparent;border-radius:7px;font-size:11px;font-weight:700;font-family:Arial,sans-serif;cursor:pointer;color:#888;text-align:center}
+.tab.active{background:#fff;color:#1a1a1a;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.panel{display:none}.panel.active{display:block}
+.card{background:#fff;border:1px solid #e0e0e0;border-radius:12px;padding:14px 16px;margin-bottom:10px}
+label{font-size:12px;font-weight:700;color:#555;display:block;margin-bottom:5px}
+input,select{width:100%;padding:10px 12px;border:1.5px solid #ddd;border-radius:8px;background:#fafafa;color:#1a1a1a;font-size:14px;font-family:Arial,sans-serif;-webkit-appearance:none}
+input:focus,select:focus{outline:none;border-color:#1a1a1a;background:#fff}
+input[type="date"]{padding:9px 12px}
+.field{margin-bottom:10px}
+.row{display:flex;align-items:center;gap:8px}
+.row-between{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.btn{padding:10px 16px;border:1.5px solid #ddd;border-radius:8px;background:#fff;color:#1a1a1a;font-size:13px;font-weight:700;font-family:Arial,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#1a1a1a;color:#fff;border-color:#1a1a1a}
+.btn.danger{color:#c0392b;border-color:#e0b0b0}
+.btn.success{background:#27ae60;color:#fff;border-color:#27ae60}
+.btn.full{width:100%;text-align:center}
+.btn.sm{padding:7px 12px;font-size:12px}
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700}
+.badge.out{background:#fde8e8;color:#c0392b}
+.badge.in{background:#e8f8f0;color:#27ae60}
+.badge.booked{background:#fef3e0;color:#d4830a}
+.badge.transfer{background:#e8eaf6;color:#2c3e9e}
+.sdot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px;flex-shrink:0}
+.sdot.in{background:#27ae60}.sdot.out{background:#c0392b}
+.iname{font-size:15px;font-weight:700}
+.isub{font-size:12px;color:#888;margin-top:3px}
+h2{font-size:15px;font-weight:700;margin-bottom:12px}
+.divider{height:1px;background:#eee;margin:12px 0}
+.empty{text-align:center;padding:2rem;color:#bbb;font-size:14px}
+.scan-box{border:2px dashed #ccc;border-radius:12px;padding:1.5rem;text-align:center;cursor:pointer;background:#fafafa}
+#video-wrap{position:relative;width:100%;max-width:400px;margin:0 auto}
+#scanner-video{width:100%;border-radius:10px;display:block}
+.scan-frame{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:65%;height:55%;border:3px solid #1a1a1a;border-radius:10px;pointer-events:none}
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999;align-items:flex-end;justify-content:center}
+.modal-bg.open{display:flex}
+.modal{background:#fff;border-radius:16px 16px 0 0;padding:20px;width:100%;max-width:500px;max-height:88vh;overflow-y:auto}
+.modal-handle{width:40px;height:4px;background:#ddd;border-radius:4px;margin:0 auto 16px}
+.modal h3{font-size:16px;font-weight:700;margin-bottom:14px}
+.log-row{font-size:13px;padding:10px 0;border-bottom:1px solid #f0f0f0}
+.log-row:last-child{border-bottom:none}
+.log-time{font-size:11px;color:#bbb;font-weight:700}
+.cal-toggle{display:flex;gap:4px;margin-bottom:12px}
+.vtab{padding:7px 14px;border:1.5px solid #ddd;border-radius:8px;font-size:12px;font-weight:700;font-family:Arial,sans-serif;cursor:pointer;background:#fff;color:#888}
+.vtab.active{background:#1a1a1a;color:#fff;border-color:#1a1a1a}
+.cal-hdr{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:3px;margin-top:10px}
+.cal-dn{text-align:center;font-size:11px;color:#bbb;font-weight:700;padding:4px 0}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.cal-cell{border:1.5px solid #e8e8e8;border-radius:7px;min-height:56px;padding:3px;cursor:pointer;background:#fff}
+.cal-cell.today{border-color:#1a1a1a}
+.cal-cell.dim{background:#f8f8f8;opacity:.5}
+.cal-cell.hasb{background:#fef3e0}
+.cal-date{font-size:11px;font-weight:700;color:#bbb;margin-bottom:2px}
+.cal-cell.today .cal-date{color:#1a1a1a}
+.cpill{font-size:10px;padding:1px 3px;border-radius:3px;background:#f59e0b;color:#fff;margin-bottom:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;font-weight:700}
+.cpill.active{background:#c0392b}
+.wgrid{display:grid;gap:2px;margin-top:8px;overflow-x:auto}
+.wch{text-align:center;font-size:11px;font-weight:700;padding:5px 2px;border-bottom:1.5px solid #e8e8e8;color:#bbb}
+.wch.today{color:#1a1a1a}
+.wrl{font-size:11px;color:#888;padding:5px 5px 5px 0;border-right:1.5px solid #e8e8e8;font-weight:700;overflow:hidden;display:flex;align-items:flex-start;padding-top:7px}
+.wcell{min-height:48px;border:1px solid #e8e8e8;border-radius:5px;padding:3px;background:#fff}
+.wcell.today{border-color:#1a1a1a}
+.wpill{font-size:10px;padding:2px 4px;border-radius:3px;background:#fef3e0;color:#d4830a;margin-bottom:2px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;cursor:pointer}
+.wpill.active{background:#fde8e8;color:#c0392b}
+.brow{padding:10px 0;border-bottom:1px solid #f0f0f0;font-size:13px}
+.brow:last-child{border-bottom:none}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:10px 20px;border-radius:20px;font-size:13px;font-weight:700;font-family:Arial,sans-serif;z-index:9999;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;max-width:90vw;text-align:center}
+.toast.show{opacity:1}
+@media(max-width:400px){.g2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="toast" id="toast"></div>
+
+
+<!-- SETUP SCREEN -->
+<div id="setup-screen" style="display:none;position:fixed;inset:0;background:#f2f2f2;z-index:5000;overflow-y:auto;padding:20px;display:flex;align-items:flex-start;justify-content:center;padding-top:40px">
+  <div style="background:#fff;border-radius:16px;padding:24px;width:100%;max-width:440px;box-shadow:0 4px 24px rgba(0,0,0,.1)">
+    <h2 style="font-size:20px;font-weight:700;margin-bottom:8px">⚙️ Setup</h2>
+    <p style="font-size:13px;color:#666;margin-bottom:16px;line-height:1.6">Uses GitHub Gist to store shared data. Free, no expiry, works on all devices.</p>
+    <div style="background:#f0f7ff;border-radius:8px;padding:14px;margin-bottom:16px;font-size:13px;line-height:1.8">
+      <strong>Step 1:</strong> Go to <a href="https://github.com/settings/tokens/new" target="_blank"><strong>github.com/settings/tokens/new</strong></a><br>
+      <strong>Step 2:</strong> Give it any name (e.g. "Equipment Tracker")<br>
+      <strong>Step 3:</strong> Tick <strong>gist</strong> under scopes<br>
+      <strong>Step 4:</strong> Click <strong>Generate token</strong> → copy it<br>
+      <strong>Step 5:</strong> Paste below and tap Connect
+    </div>
+    <div id="setup-err" style="display:none;background:#fde8e8;color:#c0392b;border-radius:8px;padding:10px;font-size:13px;font-weight:700;margin-bottom:12px"></div>
+    <div style="margin-bottom:10px">
+      <label style="font-size:12px;font-weight:700;color:#555;display:block;margin-bottom:5px">GitHub Personal Access Token</label>
+      <input type="password" id="setup-token" placeholder="ghp_xxxxxxxxxxxx" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:100%;padding:10px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;font-family:Arial,sans-serif">
+    </div>
+    <button onclick="connectGist()" id="setup-btn" style="width:100%;padding:12px;background:#1a1a1a;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;font-family:Arial,sans-serif;cursor:pointer;margin-bottom:10px">Connect & Start</button>
+    <div style="border-top:1px solid #eee;padding-top:14px;margin-top:4px">
+      <p style="font-size:12px;color:#888;margin-bottom:10px"><strong>Already set up?</strong> Paste your token AND Gist ID below:</p>
+      <div style="margin-bottom:8px">
+        <label style="font-size:12px;font-weight:700;color:#555;display:block;margin-bottom:4px">Gist ID</label>
+        <input type="text" id="setup-gist-id" placeholder="e.g. a1b2c3d4e5f6..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:100%;padding:10px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;font-family:Arial,sans-serif">
+      </div>
+      <button onclick="connectExisting()" style="width:100%;padding:12px;background:#fff;color:#1a1a1a;border:1.5px solid #ddd;border-radius:8px;font-size:14px;font-weight:700;font-family:Arial,sans-serif;cursor:pointer">Connect to existing data</button>
+    </div>
+  </div>
+</div>
+
+<div class="app" id="main-app">
+  <div class="header">
+    <div>
+      <div class="header-title">Equipment Tracker</div>
+      <div class="header-sub" id="hdr-sub">Connecting...</div>
+      <div id="admin-badge" style="display:none;font-size:11px;color:#f39c12;font-weight:700;margin-top:2px">🔓 Admin mode</div>
+    </div>
+    <div class="sync-row">
+      <div class="sync-dot busy" id="sync-dot"></div>
+      <span class="sync-lbl" id="sync-lbl">Syncing</span>
+      <button class="btn-sync" onclick="syncNow()">↻ Sync</button>
+      <button class="btn-sync" id="admin-btn" onclick="toggleAdmin()" style="background:rgba(255,200,0,.15);border-color:rgba(255,200,0,.3)">🔒</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('scan')" id="tab-scan">📷 Scan</button>
+    <button class="tab" onclick="showTab('cal')" id="tab-cal">📅 Cal</button>
+    <button class="tab" onclick="showTab('items')" id="tab-items">🔧 Items</button>
+    <button class="tab" onclick="showTab('staff')" id="tab-staff">👥 Staff</button>
+    <button class="tab" onclick="showTab('log')" id="tab-log">📋 Log</button>
+  </div>
+
+  <!-- SCAN -->
+  <div class="panel active" id="panel-scan">
+    <div class="card">
+      <div class="field">
+        <label>Employee</label>
+        <select id="scan-emp"><option value="">Select employee...</option></select>
+      </div>
+      <div class="field">
+        <label>Job number</label>
+        <input type="text" id="scan-job" placeholder="e.g. JOB-001">
+      </div>
+    </div>
+    <div class="scan-box" id="scan-trigger" onclick="startScan()">
+      <div style="font-size:36px;margin-bottom:8px">📷</div>
+      <div style="font-size:15px;font-weight:700">Tap to scan QR / barcode</div>
+      <div style="font-size:12px;color:#aaa;margin-top:4px">Works on all phones</div>
+    </div>
+    <div id="scanner-area" style="display:none;margin-top:12px">
+      <div id="video-wrap">
+        <video id="scanner-video" autoplay muted playsinline></video>
+        <div class="scan-frame"></div>
+      </div>
+      <div style="text-align:center;margin-top:10px">
+        <div style="font-size:13px;color:#888;margin-bottom:8px">Point at barcode</div>
+        <button class="btn sm" onclick="stopScan()">Cancel</button>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div style="font-size:12px;font-weight:700;color:#888;margin-bottom:8px">Or enter item ID manually</div>
+    <div class="row">
+      <input type="text" id="manual-code" placeholder="Item ID...">
+      <button class="btn primary sm" onclick="processCode(document.getElementById('manual-code').value.trim())">Go</button>
+    </div>
+    <div id="scan-result" style="display:none;margin-top:12px"></div>
+  </div>
+
+  <!-- CALENDAR -->
+  <div class="panel" id="panel-cal">
+    <div class="row-between" style="margin-bottom:10px">
+      <div class="cal-toggle">
+        <button class="vtab active" id="vt-month" onclick="setView('month')">Month</button>
+        <button class="vtab" id="vt-week" onclick="setView('week')">Week</button>
+      </div>
+      <div class="row">
+        <button class="btn sm" onclick="calPrev()">‹</button>
+        <div style="font-size:13px;font-weight:700;min-width:130px;text-align:center" id="cal-lbl"></div>
+        <button class="btn sm" onclick="calNext()">›</button>
+      </div>
+    </div>
+    <div id="cal-container"></div>
+    <div class="divider"></div>
+    <h2>Book an item</h2>
+    <div class="card">
+      <div class="g2" style="margin-bottom:10px">
+        <div class="field"><label>Item</label><select id="bk-item"><option value="">Select...</option></select></div>
+        <div class="field"><label>Employee</label><select id="bk-emp"><option value="">Select...</option></select></div>
+      </div>
+      <div class="g2" style="margin-bottom:10px">
+        <div class="field"><label>From</label><input type="date" id="bk-from"></div>
+        <div class="field"><label>To</label><input type="date" id="bk-to"></div>
+      </div>
+      <div class="field"><label>Job number</label><input type="text" id="bk-job" placeholder="e.g. JOB-001"></div>
+      <button class="btn primary full" onclick="addBooking()">Create booking</button>
+    </div>
+    <div class="row-between" style="margin-bottom:10px">
+      <h2 style="margin:0">Upcoming bookings</h2>
+      <div class="row">
+        <button class="btn sm" onclick="doExport('bookings')">⬇ Bookings</button>
+        <button class="btn sm" onclick="doExport('log')">⬇ Log</button>
+      </div>
+    </div>
+    <div id="bk-list"></div>
+  </div>
+
+  <!-- ITEMS -->
+  <div class="panel" id="panel-items">
+    <h2>Items</h2>
+    <div class="card" style="margin-bottom:10px" id="add-item-card">
+      <div class="field"><label>Item name</label><input type="text" id="new-item-name" placeholder="e.g. Drill, Ladder, Harness"></div>
+      <div class="field">
+        <label>Item ID</label>
+        <div class="row"><input type="text" id="new-item-id" placeholder="e.g. TOOL-001"><button class="btn sm" onclick="autoId()">Auto</button></div>
+      </div>
+      <button class="btn primary full" onclick="addItem()">Add item</button>
+    </div>
+    <div id="no-admin-items" style="display:none" class="card" style="margin-bottom:10px;text-align:center;color:#aaa;font-size:13px">🔒 Contact your admin to add or remove items.</div>
+    <div id="items-list"></div>
+  </div>
+
+  <!-- STAFF -->
+  <div class="panel" id="panel-staff">
+    <h2>Staff</h2>
+    <div class="card" style="margin-bottom:10px" id="add-emp-card">
+      <div class="row"><input type="text" id="new-emp" placeholder="Full name"><button class="btn primary" onclick="addEmp()">Add</button></div>
+    </div>
+    <div id="no-admin-emp" style="display:none" class="card" style="margin-bottom:10px;text-align:center;color:#aaa;font-size:13px">🔒 Contact your admin to add or remove staff.</div>
+    <div id="emp-list"></div>
+  </div>
+
+  <!-- LOG -->
+  <div class="panel" id="panel-log">
+    <div class="row-between" style="margin-bottom:12px">
+      <h2 style="margin:0">Activity log</h2>
+      <div class="row">
+        <button class="btn sm" onclick="doExport('log')">⬇ Export</button>
+        <button class="btn danger sm" onclick="clearLog()">Clear</button>
+      </div>
+    </div>
+    <div id="log-list"></div>
+  </div>
+</div>
+
+<!-- BARCODE MODAL -->
+<div class="modal-bg" id="modal-bc">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="row-between" style="margin-bottom:14px">
+      <h3 id="bc-title">QR Code</h3>
+      <button class="btn sm" onclick="closeModal('modal-bc')">Close</button>
+    </div>
+    <div style="display:flex;justify-content:center;padding:10px;background:#fff;border-radius:8px" id="bc-display"></div>
+    <div style="text-align:center;margin-top:8px;font-size:13px;font-weight:700;color:#888" id="bc-sub"></div>
+    <button class="btn full" style="margin-top:14px" onclick="printBC()">🖨 Print label</button>
+  </div>
+</div>
+
+<!-- CONFIRM MODAL -->
+<div class="modal-bg" id="modal-confirm">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3 id="conf-title">Confirm</h3>
+    <div id="conf-body" style="font-size:14px;color:#666;margin-bottom:18px;line-height:1.5"></div>
+    <div class="row">
+      <button class="btn" style="flex:1" onclick="closeModal('modal-confirm')">Cancel</button>
+      <button class="btn primary" style="flex:1" id="conf-btn">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- DAY MODAL -->
+<div class="modal-bg" id="modal-day">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="row-between" style="margin-bottom:14px">
+      <h3 id="day-title"></h3>
+      <button class="btn sm" onclick="closeModal('modal-day')">Close</button>
+    </div>
+    <div id="day-body"></div>
+  </div>
+</div>
+
+<script>
+// ─── Config ────────────────────────────────────────────────────────────────
+var GIST_ID = 'f3b8b0665c805203bceb630f3a0059c6';
+var GIST_TOKEN_STORED = 'ghp_XIJeViDqjvsrOMaqZhGIpXAFLYA78b3UL6dg';
+var ADMIN_PASSWORD = 'novos2024';
+var GIST_TOKEN = '';
+var IS_ADMIN = false;
+
+// ─── State ─────────────────────────────────────────────────────────────────
+var db = { items: [], employees: [], log: [], bookings: [] };
+var scanStream = null;
+var scanReader = null;
+var pendingAction = null;
+var calView = 'month';
+var NOW = new Date();
+var calYear = NOW.getFullYear();
+var calMonth = NOW.getMonth();
+var calWeekStart = wkStart(NOW);
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+function wkStart(d) { var x = new Date(d); x.setDate(x.getDate() - x.getDay()); x.setHours(0,0,0,0); return x; }
+function toStr(d) { return d.toISOString().slice(0,10); }
+function todayStr() { return toStr(NOW); }
+function addDays(d, n) { var x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function esc(s) { return String(s||'').replace(/[&<>"']/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function toast(msg) { var t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(function() { t.classList.remove('show'); }, 2500); }
+function setSS(state, lbl) { var d = document.getElementById('sync-dot'); var l = document.getElementById('sync-lbl'); if (!d) return; d.className = 'sync-dot' + (state ? ' ' + state : ''); l.textContent = lbl; }
+
+// ─── Firebase ──────────────────────────────────────────────────────────────
+function loadCloud() {
+  if (!GIST_TOKEN || !GIST_ID) { loadLocal(); renderAll(); return; }
+  setSS('busy', 'Syncing...');
+  fetch('https://api.github.com/gists/' + GIST_ID, {
+    headers: {
+      'Authorization': 'token ' + GIST_TOKEN,
+      'Accept': 'application/vnd.github.v3+json'
+    }
+  })
+  .then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(function(gist) {
+    var content = gist.files['equipdb.json'] && gist.files['equipdb.json'].content;
+    if (content) {
+      var data = JSON.parse(content);
+      if (data && typeof data === 'object') {
+        db = data;
+        if (!db.items) db.items = [];
+        if (!db.employees) db.employees = [];
+        if (!db.log) db.log = [];
+        if (!db.bookings) db.bookings = [];
+      }
+    } else {
+      db = { items: [], employees: [], log: [], bookings: [] };
+      saveCloud();
+    }
+    setSS('ok', 'Synced');
+    renderAll();
+  })
+  .catch(function(e) {
+    console.error('loadCloud failed:', e.message);
+    setSS('err', 'Offline – local data');
+    loadLocal();
+    renderAll();
+  });
+}
+
+function saveCloud() {
+  if (!GIST_TOKEN || !GIST_ID) { saveLocal(); return; }
+  setSS('busy', 'Saving...');
+  fetch('https://api.github.com/gists/' + GIST_ID, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': 'token ' + GIST_TOKEN,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      files: { 'equipdb.json': { content: JSON.stringify(db) } }
+    })
+  })
+  .then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    saveLocal();
+    setSS('ok', 'Saved ✓');
+  })
+  .catch(function(e) {
+    console.error('saveCloud error:', e);
+    setSS('err', 'Save failed');
+    saveLocal();
+    toast('⚠ Could not save to cloud');
+  });
+}
+
+function saveLocal() { try { localStorage.setItem('et-db', JSON.stringify(db)); } catch(e) {} }
+function loadLocal() { try { var d = localStorage.getItem('et-db'); if (d) { db = JSON.parse(d); if (!db.items) db.items = []; if (!db.employees) db.employees = []; if (!db.log) db.log = []; if (!db.bookings) db.bookings = []; } } catch(e) {} }
+function syncNow() { loadCloud(); }
+
+// ─── Tabs ──────────────────────────────────────────────────────────────────
+function showTab(t) {
+  document.querySelectorAll('.tab').forEach(function(x) { x.classList.remove('active'); });
+  document.querySelectorAll('.panel').forEach(function(x) { x.classList.remove('active'); });
+  document.getElementById('tab-' + t).classList.add('active');
+  document.getElementById('panel-' + t).classList.add('active');
+  stopScan();
+  if (t === 'scan') renderScanEmps();
+  if (t === 'cal') { renderCal(); renderBkForm(); renderBkList(); }
+}
+
+function renderAll() {
+  renderItems();
+  renderEmps();
+  renderLog();
+  renderScanEmps();
+  updateHdr();
+  renderCal();
+  renderBkForm();
+  renderBkList();
+  // Show/hide admin elements
+  var addItem = document.getElementById('add-item-card');
+  var noItem = document.getElementById('no-admin-items');
+  var addEmp = document.getElementById('add-emp-card');
+  var noEmp = document.getElementById('no-admin-emp');
+  var badge = document.getElementById('admin-badge');
+  var adminBtn = document.getElementById('admin-btn');
+  if (addItem) addItem.style.display = IS_ADMIN ? 'block' : 'none';
+  if (noItem) noItem.style.display = IS_ADMIN ? 'none' : 'block';
+  if (addEmp) addEmp.style.display = IS_ADMIN ? 'block' : 'none';
+  if (noEmp) noEmp.style.display = IS_ADMIN ? 'none' : 'block';
+  if (badge) badge.style.display = IS_ADMIN ? 'block' : 'none';
+  if (adminBtn) adminBtn.textContent = IS_ADMIN ? '🔓' : '🔒';
+}
+
+function updateHdr() {
+  try {
+    var out = db.items.filter(function(i) { return i.status === 'out'; }).length;
+    var bks = db.bookings.filter(function(b) { return b.status === 'active' && b.to >= todayStr(); }).length;
+    var el = document.getElementById('hdr-sub');
+    if (el) el.textContent = db.items.length + ' items · ' + out + ' out · ' + bks + ' bookings';
+  } catch(e) { console.error('updateHdr error:', e); }
+}
+
+// ─── Scan ──────────────────────────────────────────────────────────────────
+function renderScanEmps() {
+  var sel = document.getElementById('scan-emp');
+  var cur = sel.value;
+  sel.innerHTML = '<option value="">Select employee...</option>';
+  db.employees.forEach(function(e) {
+    var o = document.createElement('option');
+    o.value = e.name; o.textContent = e.name;
+    if (e.name === cur) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+function startScan() {
+  if (!navigator.mediaDevices) { alert('Camera not available in this browser.'); return; }
+  document.getElementById('scan-trigger').style.display = 'none';
+  document.getElementById('scanner-area').style.display = 'block';
+
+  // Load ZXing then start scanning
+  if (window.ZXing) {
+    startZXing();
+  } else {
+    var s = document.createElement('script');
+    s.src = 'https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js';
+    s.onload = function() { startZXing(); };
+    s.onerror = function() { alert('Could not load scanner. Please use manual entry below.'); stopScan(); };
+    document.head.appendChild(s);
+  }
+}
+
+function startZXing() {
+  try {
+    var hints = new Map();
+    hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      window.ZXing.BarcodeFormat.CODE_128,
+      window.ZXing.BarcodeFormat.CODE_39,
+      window.ZXing.BarcodeFormat.EAN_13,
+      window.ZXing.BarcodeFormat.EAN_8,
+      window.ZXing.BarcodeFormat.QR_CODE
+    ]);
+    scanReader = new window.ZXing.BrowserMultiFormatReader(hints);
+    scanReader.decodeFromConstraints(
+      { video: { facingMode: 'environment' } },
+      document.getElementById('scanner-video'),
+      function(result, err) {
+        if (result) {
+          var code = result.getText();
+          scanReader.reset();
+          scanReader = null;
+          stopScan();
+          processCode(code);
+        }
+      }
+    );
+  } catch(e) {
+    alert('Scanner error: ' + e.message + '\n\nUse manual entry below.');
+    stopScan();
+  }
+}
+
+function stopScan() {
+  if (scanReader) { try { scanReader.reset(); } catch(e) {} scanReader = null; }
+  var video = document.getElementById('scanner-video');
+  if (video && video.srcObject) { try { video.srcObject.getTracks().forEach(function(t) { t.stop(); }); video.srcObject = null; } catch(e) {} }
+  var st = document.getElementById('scan-trigger');
+  var sa = document.getElementById('scanner-area');
+  if (st) st.style.display = 'block';
+  if (sa) sa.style.display = 'none';
+}
+
+function processCode(code) {
+  var mc = document.getElementById('manual-code');
+  if (mc) mc.value = '';
+  if (!code) return;
+  var item = null;
+  for (var i = 0; i < db.items.length; i++) { if (db.items[i].id === code) { item = db.items[i]; break; } }
+  var re = document.getElementById('scan-result');
+  if (!item) {
+    re.style.display = 'block';
+    re.innerHTML = '<div class="card" style="border-color:#e0b0b0"><div style="color:#c0392b;font-weight:700">⚠ Item not found</div><div class="isub">No item with ID: <strong>' + esc(code) + '</strong></div></div>';
+    return;
+  }
+  var emp = document.getElementById('scan-emp').value;
+  var job = document.getElementById('scan-job').value.trim();
+  if (item.status === 'in') {
+    if (!emp) { alert('Please select an employee first.'); return; }
+    if (!job) { alert('Please enter a job number.'); return; }
+    pendingAction = { type: 'out', item: item, emp: emp, job: job };
+    document.getElementById('conf-title').textContent = 'Check out item';
+    document.getElementById('conf-body').innerHTML = 'Check out <strong>' + esc(item.name) + '</strong> to <strong>' + esc(emp) + '</strong> on job <strong>' + esc(job) + '</strong>?';
+    document.getElementById('conf-btn').textContent = 'Check out';
+    document.getElementById('conf-btn').className = 'btn danger';
+    document.getElementById('modal-confirm').classList.add('open');
+  } else {
+    // Item is out — show transfer/return options
+    showTransferModal(item, emp, job);
+  }
+}
+
+document.getElementById('conf-btn').onclick = function() {
+  try {
+    if (!pendingAction) return;
+    var now = new Date().toLocaleString('en-AU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+    if (pendingAction.type === 'out') {
+      var item = pendingAction.item, emp = pendingAction.emp, job = pendingAction.job;
+      item.status = 'out'; item.employee = emp; item.job = job; item.since = now;
+      db.log.push({ action:'out', itemId:item.id, itemName:item.name, employee:emp, job:job, time:now });
+      showScanResult('<div class="card" style="border-color:#e0b0b0"><div style="font-weight:700;color:#c0392b">↑ Checked out</div><div class="isub">' + esc(item.name) + ' → ' + esc(emp) + ' · ' + esc(job) + '</div></div>');
+      toast('Checked out ✓');
+    } else if (pendingAction.type === 'transfer') {
+      var item = pendingAction.item, fromEmp = pendingAction.fromEmp, toEmp = pendingAction.toEmp, job = pendingAction.job;
+      db.log.push({ action:'transfer', itemId:item.id, itemName:item.name, employee:toEmp, fromEmployee:fromEmp, job:job, time:now });
+      item.employee = toEmp; item.job = job; item.since = now;
+      showScanResult('<div class="card" style="border-color:#b0b8e0"><div style="font-weight:700;color:#2c3e9e">⇄ Transferred</div><div class="isub">' + esc(item.name) + ': ' + esc(fromEmp) + ' → ' + esc(toEmp) + '</div></div>');
+      toast('Transferred ✓');
+    } else {
+      var item = pendingAction.item;
+      db.log.push({ action:'in', itemId:item.id, itemName:item.name, employee:item.employee, job:item.job, time:now });
+      item.status = 'in'; item.employee = null; item.job = null; item.since = null;
+      showScanResult('<div class="card" style="border-color:#b0d8b0"><div style="font-weight:700;color:#27ae60">↓ Returned</div><div class="isub">' + esc(item.name) + ' back in storage</div></div>');
+      toast('Returned ✓');
+    }
+    saveCloud(); renderAll(); closeModal('modal-confirm');
+  } catch(e) {
+    console.error('confirm error:', e);
+    alert('Error: ' + e.message);
+  }
+};
+
+function showScanResult(html) {
+  var el = document.getElementById('scan-result');
+  el.style.display = 'block'; el.innerHTML = html;
+  setTimeout(function() { el.style.display = 'none'; }, 4000);
+}
+
+// ─── Calendar ──────────────────────────────────────────────────────────────
+function setView(v) {
+  calView = v;
+  document.getElementById('vt-month').classList.toggle('active', v === 'month');
+  document.getElementById('vt-week').classList.toggle('active', v === 'week');
+  renderCal();
+}
+function calPrev() { if (calView === 'month') { calMonth--; if (calMonth < 0) { calMonth = 11; calYear--; } } else { calWeekStart = addDays(calWeekStart, -7); } renderCal(); }
+function calNext() { if (calView === 'month') { calMonth++; if (calMonth > 11) { calMonth = 0; calYear++; } } else { calWeekStart = addDays(calWeekStart, 7); } renderCal(); }
+
+function renderCal() {
+  var lbl = document.getElementById('cal-lbl');
+  var con = document.getElementById('cal-container');
+  if (!lbl || !con) return;
+  var MN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var t = todayStr();
+  if (calView === 'month') {
+    lbl.textContent = MN[calMonth] + ' ' + calYear;
+    var first = new Date(calYear, calMonth, 1);
+    var last = new Date(calYear, calMonth + 1, 0);
+    var sd = first.getDay();
+    var h = '<div class="cal-hdr">' + ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(function(d) { return '<div class="cal-dn">' + d + '</div>'; }).join('') + '</div><div class="cal-grid">';
+    for (var i = 0; i < sd; i++) { var d = new Date(calYear, calMonth, -sd + i + 1); h += '<div class="cal-cell dim"><div class="cal-date">' + d.getDate() + '</div></div>'; }
+    for (var d = 1; d <= last.getDate(); d++) {
+      var ds = calYear + '-' + String(calMonth+1).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+      var isT = ds === t;
+      var dayB = db.bookings.filter(function(b) { return b.status === 'active' && b.from <= ds && b.to >= ds; });
+      var pills = dayB.slice(0,2).map(function(b) { var out = db.items.filter(function(i) { return i.id === b.itemId && i.status === 'out'; }).length > 0; return '<span class="cpill' + (out ? ' active' : '') + '">' + esc(b.itemName.length > 8 ? b.itemName.slice(0,7) + '…' : b.itemName) + '</span>'; }).join('');
+      var more = dayB.length > 2 ? '<span style="font-size:10px;color:#bbb;font-weight:700">+' + (dayB.length-2) + '</span>' : '';
+      h += '<div class="cal-cell' + (isT ? ' today' : '') + (dayB.length ? ' hasb' : '') + '" onclick="showDay(\'' + ds + '\')">' + '<div class="cal-date">' + d + '</div>' + pills + more + '</div>';
+    }
+    var rem = (7 - (sd + last.getDate()) % 7) % 7;
+    for (var i = 1; i <= rem; i++) h += '<div class="cal-cell dim"><div class="cal-date">' + i + '</div></div>';
+    con.innerHTML = h + '</div>';
+  } else {
+    var we = addDays(calWeekStart, 6);
+    lbl.textContent = calWeekStart.toLocaleDateString('en-AU', {day:'numeric',month:'short'}) + ' – ' + we.toLocaleDateString('en-AU', {day:'numeric',month:'short'});
+    var days = [];
+    for (var i = 0; i < 7; i++) days.push(addDays(calWeekStart, i));
+    var DN = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    var cols = '80px ' + days.map(function() { return 'minmax(0,1fr)'; }).join(' ');
+    var h = '<div class="wgrid" style="grid-template-columns:' + cols + '"><div></div>';
+    days.forEach(function(d, i) { var ds = toStr(d); var isT = ds === t; h += '<div class="wch' + (isT ? ' today' : '') + '">' + DN[i] + '<br><span style="font-size:13px">' + d.getDate() + '</span></div>'; });
+    var hasAny = false;
+    db.items.forEach(function(item) {
+      var iB = db.bookings.filter(function(b) { return b.itemId === item.id && b.status === 'active'; });
+      var inWeek = days.some(function(d) { return iB.some(function(b) { return b.from <= toStr(d) && b.to >= toStr(d); }); });
+      if (!inWeek) return;
+      hasAny = true;
+      h += '<div class="wrl" title="' + esc(item.name) + '">' + esc(item.name.length > 10 ? item.name.slice(0,9) + '…' : item.name) + '</div>';
+      days.forEach(function(d) {
+        var ds = toStr(d); var isT = ds === t;
+        var dayB = iB.filter(function(b) { return b.from <= ds && b.to >= ds; });
+        var pills = dayB.map(function(b) { return '<span class="wpill' + (item.status === 'out' ? ' active' : '') + '" onclick="showDay(\'' + ds + '\')">' + esc(b.employee.split(' ')[0]) + '</span>'; }).join('');
+        h += '<div class="wcell' + (isT ? ' today' : '') + '">' + pills + '</div>';
+      });
+    });
+    if (!hasAny) h += '<div style="grid-column:1/-1;padding:2rem;text-align:center;color:#bbb;font-size:14px">No bookings this week.</div>';
+    con.innerHTML = h + '</div>';
+  }
+}
+
+function showDay(ds) {
+  var dayB = db.bookings.filter(function(b) { return b.status === 'active' && b.from <= ds && b.to >= ds; });
+  var d = new Date(ds + 'T12:00:00');
+  document.getElementById('day-title').textContent = d.toLocaleDateString('en-AU', {weekday:'long',day:'numeric',month:'long'});
+  document.getElementById('day-body').innerHTML = !dayB.length
+    ? '<div class="empty" style="padding:1rem">No bookings on this day.</div>'
+    : dayB.map(function(b) {
+        var item = db.items.filter(function(i) { return i.id === b.itemId; })[0];
+        var isOut = item && item.status === 'out';
+        return '<div class="brow"><div class="row-between"><span style="font-weight:700">' + esc(b.itemName) + '</span><span class="badge ' + (isOut ? 'out' : 'booked') + '">' + (isOut ? 'Out now' : 'Booked') + '</span></div><div style="font-size:12px;color:#888;margin-top:4px">👤 ' + esc(b.employee) + '<br>💼 Job: ' + esc(b.job) + '<br>📅 ' + b.from + ' → ' + b.to + '</div></div>';
+      }).join('');
+  document.getElementById('modal-day').classList.add('open');
+}
+
+// ─── Bookings ──────────────────────────────────────────────────────────────
+function renderBkForm() {
+  var bi = document.getElementById('bk-item');
+  var be = document.getElementById('bk-emp');
+  if (!bi || !be) return;
+  bi.innerHTML = '<option value="">Select...</option>';
+  db.items.forEach(function(i) {
+    var status = i.status === 'out' ? ' ⚠ OUT - ' + (i.employee||'?') : ' ✓ Available';
+    bi.innerHTML += '<option value="' + esc(i.id) + '">' + esc(i.name) + ' (' + esc(i.id) + ')' + status + '</option>';
+  });
+  be.innerHTML = '<option value="">Select...</option>';
+  db.employees.forEach(function(e) { be.innerHTML += '<option value="' + esc(e.name) + '">' + esc(e.name) + '</option>'; });
+  document.getElementById('bk-from').value = todayStr();
+  document.getElementById('bk-to').value = todayStr();
+}
+
+function addBooking() {
+  var itemId = document.getElementById('bk-item').value;
+  var emp = document.getElementById('bk-emp').value;
+  var from = document.getElementById('bk-from').value;
+  var to = document.getElementById('bk-to').value;
+  var job = document.getElementById('bk-job').value.trim();
+  if (!itemId || !emp || !from || !to) { alert('Please fill in all booking fields.'); return; }
+  if (from > to) { alert('End date must be on or after start date.'); return; }
+  var item = db.items.filter(function(i) { return i.id === itemId; })[0];
+
+  // Check if item is currently checked out
+  if (item.status === 'out') {
+    var msg = '⚠ ' + item.name + ' is currently checked out.\n\n'
+      + '👤 Who has it: ' + (item.employee || 'Unknown') + '\n'
+      + '💼 Job: ' + (item.job || '—') + '\n'
+      + '🕐 Since: ' + (item.since || 'Unknown') + '\n\n'
+      + 'You can still make a future booking. Continue?';
+    if (!confirm(msg)) return;
+  }
+
+  // Check for booking conflicts on the requested dates
+  var clash = db.bookings.filter(function(b) {
+    return b.itemId === itemId && b.status === 'active' && b.from <= to && b.to >= from;
+  })[0];
+  if (clash) {
+    alert('❌ Booking conflict!\n\n'
+      + item.name + ' is already booked by ' + clash.employee
+      + '\nFrom: ' + clash.from + ' to ' + clash.to
+      + '\nJob: ' + clash.job
+      + '\n\nPlease choose different dates.');
+    return;
+  }
+
+  db.bookings.push({ id: Date.now().toString(), itemId: itemId, itemName: item.name, employee: emp, from: from, to: to, job: job || '—', status: 'active', created: new Date().toLocaleString('en-AU') });
+  document.getElementById('bk-job').value = '';
+  saveCloud(); renderCal(); renderBkList(); updateHdr(); toast('Booking created ✓');
+}
+
+function cancelBk(id) {
+  if (!confirm('Cancel this booking?')) return;
+  var b = db.bookings.filter(function(x) { return x.id === id; })[0];
+  if (b) b.status = 'cancelled';
+  saveCloud(); renderCal(); renderBkList(); updateHdr(); toast('Booking cancelled');
+}
+
+function renderBkList() {
+  var el = document.getElementById('bk-list');
+  if (!el) return;
+  var t = todayStr();
+  var active = db.bookings.filter(function(b) { return b.status === 'active' && b.to >= t; }).sort(function(a, b) { return a.from.localeCompare(b.from); });
+  if (!active.length) { el.innerHTML = '<div class="empty">No upcoming bookings.</div>'; return; }
+  el.innerHTML = active.map(function(b) {
+    return '<div class="brow"><div class="row-between"><div><span style="font-weight:700">' + esc(b.itemName) + '</span><span class="badge booked" style="margin-left:8px">Booked</span></div><button class="btn danger sm" onclick="cancelBk(\'' + b.id + '\')">✕</button></div><div style="font-size:12px;color:#888;margin-top:4px">👤 ' + esc(b.employee) + ' &nbsp; 💼 ' + esc(b.job) + ' &nbsp; 📅 ' + b.from + ' → ' + b.to + '</div></div>';
+  }).join('');
+}
+
+// ─── Items ─────────────────────────────────────────────────────────────────
+function autoId() { document.getElementById('new-item-id').value = 'ITEM-' + String(db.items.length + 1).padStart(3,'0'); }
+
+function addItem() {
+  var name = document.getElementById('new-item-name').value.trim();
+  var id = document.getElementById('new-item-id').value.trim();
+  if (!name || !id) { alert('Enter item name and ID.'); return; }
+  for (var i = 0; i < db.items.length; i++) { if (db.items[i].id === id) { alert('That Item ID already exists.'); return; } }
+  db.items.push({ id: id, name: name, status: 'in', employee: null, job: null, since: null });
+  document.getElementById('new-item-name').value = '';
+  document.getElementById('new-item-id').value = '';
+  saveCloud(); renderItems(); renderBkForm(); updateHdr(); toast('Item added ✓');
+}
+
+function renderItems() {
+  var el = document.getElementById('items-list');
+  if (!el) return;
+  if (!db.items.length) { el.innerHTML = '<div class="empty">No items yet. Add one above.</div>'; return; }
+  var t = todayStr();
+  var html = '';
+  for (var i = 0; i < db.items.length; i++) {
+    var item = db.items[i];
+    var nb = null;
+    for (var j = 0; j < db.bookings.length; j++) { if (db.bookings[j].itemId === item.id && db.bookings[j].status === 'active' && db.bookings[j].from >= t) { nb = db.bookings[j]; break; } }
+    var bb = nb ? '<span class="badge booked" style="margin-left:4px">Booked ' + nb.from + '</span>' : '';
+    html += '<div class="card" style="margin-bottom:8px"><div class="row-between">'
+      + '<div style="flex:1;min-width:0"><div class="row" style="gap:6px;flex-wrap:wrap">'
+      + '<span class="sdot ' + (item.status === 'in' ? 'in' : 'out') + '"></span>'
+      + '<span class="iname">' + esc(item.name) + '</span>'
+      + '<span class="badge ' + (item.status === 'in' ? 'in' : 'out') + '">' + (item.status === 'in' ? 'Available' : 'Out') + '</span>' + bb
+      + '</div><div class="isub">ID: ' + esc(item.id) + (item.status === 'out' ? ' · ' + esc(item.employee) + ' · ' + esc(item.job) : '') + '</div></div>'
+      + '<div class="row" style="gap:6px;margin-left:8px">'
+      + '<button class="btn sm" data-idx="' + i + '" onclick="showBC(this.dataset.idx)">QR</button>'
+      + (IS_ADMIN ? '<button class="btn danger sm" data-idx="' + i + '" onclick="delItem(this.dataset.idx)">✕</button>' : '')
+      + '</div></div></div>';
+  }
+  el.innerHTML = html;
+}
+
+function delItem(idx) {
+  var item = db.items[parseInt(idx)];
+  if (!item) return;
+  var bookingCount = db.bookings.filter(function(b) { return b.itemId === item.id && b.status === 'active'; }).length;
+  var msg = '⚠️ DELETE ITEM: ' + item.name + '\n\n'
+    + 'This will permanently delete this item and ALL its data.\n';
+  if (item.status === 'out') msg += '\n❗ This item is currently CHECKED OUT to ' + item.employee + '.\n';
+  if (bookingCount > 0) msg += '\n❗ This item has ' + bookingCount + ' active booking(s) that will also be deleted.\n';
+  msg += '\nThis cannot be undone. Are you sure?';
+  if (!confirm(msg)) return;
+  db.items = db.items.filter(function(i) { return i.id !== item.id; });
+  db.bookings = db.bookings.filter(function(b) { return b.itemId !== item.id; });
+  saveCloud(); renderItems(); renderCal(); renderBkList(); renderBkForm(); updateHdr(); toast('Item deleted');
+}
+
+// ─── Staff ─────────────────────────────────────────────────────────────────
+function addEmp() {
+  var name = document.getElementById('new-emp').value.trim();
+  if (!name) return;
+  for (var i = 0; i < db.employees.length; i++) { if (db.employees[i].name.toLowerCase() === name.toLowerCase()) { alert('Already exists.'); return; } }
+  db.employees.push({ name: name });
+  document.getElementById('new-emp').value = '';
+  saveCloud(); renderEmps(); renderScanEmps(); renderBkForm(); toast('Added ✓');
+}
+
+function renderEmps() {
+  var el = document.getElementById('emp-list');
+  if (!el) return;
+  if (!db.employees.length) { el.innerHTML = '<div class="empty">No employees yet.</div>'; return; }
+  el.innerHTML = db.employees.map(function(e, i) {
+    return '<div class="card" style="margin-bottom:8px"><div class="row-between"><div style="font-size:14px;font-weight:700">👤 ' + esc(e.name) + '</div>' + (IS_ADMIN ? '<button class="btn danger sm" data-idx="' + i + '" onclick="delEmp(this.dataset.idx)">✕</button>' : '') + '</div></div>';
+  }).join('');
+}
+
+function delEmp(idx) {
+  var emp = db.employees[parseInt(idx)];
+  if (!emp) return;
+  var hasItems = db.items.filter(function(i) { return i.employee === emp.name; }).length;
+  var hasBookings = db.bookings.filter(function(b) { return b.employee === emp.name && b.status === 'active'; }).length;
+  var msg = '⚠️ REMOVE EMPLOYEE: ' + emp.name + '\n\nThis will permanently remove this employee.\n';
+  if (hasItems > 0) msg += '\n❗ This employee currently has ' + hasItems + ' item(s) checked out.\n';
+  if (hasBookings > 0) msg += '\n❗ This employee has ' + hasBookings + ' active booking(s).\n';
+  msg += '\nAre you sure you want to continue?';
+  if (!confirm(msg)) return;
+  db.employees = db.employees.filter(function(e) { return e.name !== emp.name; });
+  saveCloud(); renderEmps(); renderScanEmps(); renderBkForm(); toast('Employee removed');
+}
+
+// ─── Log ───────────────────────────────────────────────────────────────────
+function renderLog() {
+  var el = document.getElementById('log-list');
+  if (!el) return;
+  if (!db.log.length) { el.innerHTML = '<div class="empty">No activity yet.</div>'; return; }
+  var rows = db.log.slice().reverse();
+  el.innerHTML = rows.map(function(e) {
+    var badgeClass = e.action === 'out' ? 'out' : e.action === 'transfer' ? 'transfer' : 'in';
+    var badgeLabel = e.action === 'out' ? '↑ Checked out' : e.action === 'transfer' ? '⇄ Transferred' : '↓ Returned';
+    var detail = '';
+    if (e.action === 'out') detail = esc(e.employee) + ' · Job: ' + esc(e.job);
+    else if (e.action === 'transfer') detail = esc(e.fromEmployee) + ' → ' + esc(e.employee) + ' · Job: ' + esc(e.job);
+    else detail = esc(e.employee);
+    return '<div class="log-row"><div class="row-between"><div><span class="badge ' + badgeClass + '" style="margin-right:8px">' + badgeLabel + '</span><strong>' + esc(e.itemName) + '</strong></div><div class="log-time">' + e.time + '</div></div><div style="font-size:12px;color:#888;margin-top:3px">' + detail + '</div></div>';
+  }).join('');
+}
+
+function clearLog() {
+  if (!confirm('Clear all log entries?')) return;
+  db.log = [];
+  saveCloud(); renderLog(); toast('Log cleared');
+}
+
+// ─── Export ────────────────────────────────────────────────────────────────
+function doExport(type) {
+  var csv = '', fn = '';
+  if (type === 'bookings') {
+    fn = 'equipment-bookings.csv';
+    csv = 'Item Name,Item ID,Employee,Job,From,To,Status,Created\n';
+    db.bookings.forEach(function(b) { csv += '"' + b.itemName + '","' + b.itemId + '","' + b.employee + '","' + b.job + '","' + b.from + '","' + b.to + '","' + b.status + '","' + b.created + '"\n'; });
+  } else {
+    fn = 'equipment-log.csv';
+    csv = 'Action,Item Name,Item ID,Employee,Job,Time\n';
+    db.log.forEach(function(e) { csv += '"' + (e.action === 'out' ? 'Checked out' : 'Returned') + '","' + e.itemName + '","' + e.itemId + '","' + e.employee + '","' + (e.job||'') + '","' + e.time + '"\n'; });
+  }
+  var blob = new Blob([csv], { type: 'text/csv' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = fn; a.click();
+  URL.revokeObjectURL(url);
+  toast('Exported ✓');
+}
+
+// ─── QR Code Library ──────────────────────────────────────────────────────
+var QRCode;!function(){function a(a){this.mode=c.MODE_8BIT_BYTE,this.data=a,this.parsedData=[];for(var b=[],d=0,e=this.data.length;e>d;d++){var f=this.data.charCodeAt(d);f>65536?(b[0]=240|(1835008&f)>>>18,b[1]=128|(258048&f)>>>12,b[2]=128|(4032&f)>>>6,b[3]=128|63&f):f>2048?(b[0]=224|(61440&f)>>>12,b[1]=128|(4032&f)>>>6,b[2]=128|63&f):f>128?(b[0]=192|(1984&f)>>>6,b[1]=128|63&f):b[0]=f,this.parsedData=this.parsedData.concat(b)}this.parsedData.length!=this.data.length&&(this.parsedData.unshift(191),this.parsedData.unshift(187),this.parsedData.unshift(239))}function b(a,b){this.typeNumber=a,this.errorCorrectLevel=b,this.modules=null,this.moduleCount=0,this.dataCache=null,this.dataList=[]}function i(a,b){if(void 0==a.length)throw new Error(a.length+"/"+b);for(var c=0;c<a.length&&0==a[c];)c++;this.num=new Array(a.length-c+b);for(var d=0;d<a.length-c;d++)this.num[d]=a[d+c]}function j(a,b){this.totalCount=a,this.dataCount=b}function k(){this.buffer=[],this.length=0}function m(){return"undefined"!=typeof CanvasRenderingContext2D}function n(){var a=!1,b=navigator.userAgent;return/android/i.test(b)&&(a=!0,aMat=b.toString().match(/android ([0-9]\.[0-9])/i),aMat&&aMat[1]&&(a=parseFloat(aMat[1]))),a}function r(a,b){for(var c=1,e=s(a),f=0,g=l.length;g>=f;f++){var h=0;switch(b){case d.L:h=l[f][0];break;case d.M:h=l[f][1];break;case d.Q:h=l[f][2];break;case d.H:h=l[f][3]}if(h>=e)break;c++}if(c>l.length)throw new Error("Too long data");return c}function s(a){var b=encodeURI(a).toString().replace(/\%[0-9a-fA-F]{2}/g,"a");return b.length+(b.length!=a?3:0)}a.prototype={getLength:function(){return this.parsedData.length},write:function(a){for(var b=0,c=this.parsedData.length;c>b;b++)a.put(this.parsedData[b],8)}},b.prototype={addData:function(b){var c=new a(b);this.dataList.push(c),this.dataCache=null},isDark:function(a,b){if(0>a||this.moduleCount<=a||0>b||this.moduleCount<=b)throw new Error(a+","+b);return this.modules[a][b]},getModuleCount:function(){return this.moduleCount},make:function(){this.makeImpl(!1,this.getBestMaskPattern())},makeImpl:function(a,c){this.moduleCount=4*this.typeNumber+17,this.modules=new Array(this.moduleCount);for(var d=0;d<this.moduleCount;d++){this.modules[d]=new Array(this.moduleCount);for(var e=0;e<this.moduleCount;e++)this.modules[d][e]=null}this.setupPositionProbePattern(0,0),this.setupPositionProbePattern(this.moduleCount-7,0),this.setupPositionProbePattern(0,this.moduleCount-7),this.setupPositionAdjustPattern(),this.setupTimingPattern(),this.setupTypeInfo(a,c),this.typeNumber>=7&&this.setupTypeNumber(a),null==this.dataCache&&(this.dataCache=b.createData(this.typeNumber,this.errorCorrectLevel,this.dataList)),this.mapData(this.dataCache,c)},setupPositionProbePattern:function(a,b){for(var c=-1;7>=c;c++)if(!(-1>=a+c||this.moduleCount<=a+c))for(var d=-1;7>=d;d++)-1>=b+d||this.moduleCount<=b+d||(this.modules[a+c][b+d]=c>=0&&6>=c&&(0==d||6==d)||d>=0&&6>=d&&(0==c||6==c)||c>=2&&4>=c&&d>=2&&4>=d?!0:!1)},getBestMaskPattern:function(){for(var a=0,b=0,c=0;8>c;c++){this.makeImpl(!0,c);var d=f.getLostPoint(this);(0==c||a>d)&&(a=d,b=c)}return b},createMovieClip:function(a,b,c){var d=a.createEmptyMovieClip(b,c),e=1;this.make();for(var f=0;f<this.modules.length;f++)for(var g=f*e,h=0;h<this.modules[f].length;h++){var i=h*e,j=this.modules[f][h];j&&(d.beginFill(0,100),d.moveTo(i,g),d.lineTo(i+e,g),d.lineTo(i+e,g+e),d.lineTo(i,g+e),d.endFill())}return d},setupTimingPattern:function(){for(var a=8;a<this.moduleCount-8;a++)null==this.modules[a][6]&&(this.modules[a][6]=0==a%2);for(var b=8;b<this.moduleCount-8;b++)null==this.modules[6][b]&&(this.modules[6][b]=0==b%2)},setupPositionAdjustPattern:function(){for(var a=f.getPatternPosition(this.typeNumber),b=0;b<a.length;b++)for(var c=0;c<a.length;c++){var d=a[b],e=a[c];if(null==this.modules[d][e])for(var g=-2;2>=g;g++)for(var h=-2;2>=h;h++)this.modules[d+g][e+h]=-2==g||2==g||-2==h||2==h||0==g&&0==h?!0:!1}},setupTypeNumber:function(a){for(var b=f.getBCHTypeNumber(this.typeNumber),c=0;18>c;c++){var d=!a&&1==(1&b>>c);this.modules[Math.floor(c/3)][c%3+this.moduleCount-8-3]=d}for(var c=0;18>c;c++){var d=!a&&1==(1&b>>c);this.modules[c%3+this.moduleCount-8-3][Math.floor(c/3)]=d}},setupTypeInfo:function(a,b){for(var c=this.errorCorrectLevel<<3|b,d=f.getBCHTypeInfo(c),e=0;15>e;e++){var g=!a&&1==(1&d>>e);6>e?this.modules[e][8]=g:8>e?this.modules[e+1][8]=g:this.modules[this.moduleCount-15+e][8]=g}for(var e=0;15>e;e++){var g=!a&&1==(1&d>>e);8>e?this.modules[8][this.moduleCount-e-1]=g:9>e?this.modules[8][15-e-1+1]=g:this.modules[8][15-e-1]=g}this.modules[this.moduleCount-8][8]=!a},mapData:function(a,b){for(var c=-1,d=this.moduleCount-1,e=7,g=0,h=this.moduleCount-1;h>0;h-=2)for(6==h&&h--;;){for(var i=0;2>i;i++)if(null==this.modules[d][h-i]){var j=!1;g<a.length&&(j=1==(1&a[g]>>>e));var k=f.getMask(b,d,h-i);k&&(j=!j),this.modules[d][h-i]=j,e--,-1==e&&(g++,e=7)}if(d+=c,0>d||this.moduleCount<=d){d-=c,c=-c;break}}}},b.PAD0=236,b.PAD1=17,b.createData=function(a,c,d){for(var e=j.getRSBlocks(a,c),g=new k,h=0;h<d.length;h++){var i=d[h];g.put(i.mode,4),g.put(i.getLength(),f.getLengthInBits(i.mode,a)),i.write(g)}for(var l=0,h=0;h<e.length;h++)l+=e[h].dataCount;if(g.getLengthInBits()>8*l)throw new Error("code length overflow. ("+g.getLengthInBits()+">"+8*l+")");for(g.getLengthInBits()+4<=8*l&&g.put(0,4);0!=g.getLengthInBits()%8;)g.putBit(!1);for(;;){if(g.getLengthInBits()>=8*l)break;if(g.put(b.PAD0,8),g.getLengthInBits()>=8*l)break;g.put(b.PAD1,8)}return b.createBytes(g,e)},b.createBytes=function(a,b){for(var c=0,d=0,e=0,g=new Array(b.length),h=new Array(b.length),j=0;j<b.length;j++){var k=b[j].dataCount,l=b[j].totalCount-k;d=Math.max(d,k),e=Math.max(e,l),g[j]=new Array(k);for(var m=0;m<g[j].length;m++)g[j][m]=255&a.buffer[m+c];c+=k;var n=f.getErrorCorrectPolynomial(l),o=new i(g[j],n.getLength()-1),p=o.mod(n);h[j]=new Array(n.getLength()-1);for(var m=0;m<h[j].length;m++){var q=m+p.getLength()-h[j].length;h[j][m]=q>=0?p.get(q):0}}for(var r=0,m=0;m<b.length;m++)r+=b[m].totalCount;for(var s=new Array(r),t=0,m=0;d>m;m++)for(var j=0;j<b.length;j++)m<g[j].length&&(s[t++]=g[j][m]);for(var m=0;e>m;m++)for(var j=0;j<b.length;j++)m<h[j].length&&(s[t++]=h[j][m]);return s};for(var c={MODE_NUMBER:1,MODE_ALPHA_NUM:2,MODE_8BIT_BYTE:4,MODE_KANJI:8},d={L:1,M:0,Q:3,H:2},e={PATTERN000:0,PATTERN001:1,PATTERN010:2,PATTERN011:3,PATTERN100:4,PATTERN101:5,PATTERN110:6,PATTERN111:7},f={PATTERN_POSITION_TABLE:[[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50],[6,30,54],[6,32,58],[6,34,62],[6,26,46,66],[6,26,48,70],[6,26,50,74],[6,30,54,78],[6,30,56,82],[6,30,58,86],[6,34,62,90],[6,28,50,72,94],[6,26,50,74,98],[6,30,54,78,102],[6,28,54,80,106],[6,32,58,84,110],[6,30,58,86,114],[6,34,62,90,118],[6,26,50,74,98,122],[6,30,54,78,102,126],[6,26,52,78,104,130],[6,30,56,82,108,134],[6,34,60,86,112,138],[6,30,58,86,114,142],[6,34,62,90,118,146],[6,30,54,78,102,126,150],[6,24,50,76,102,128,154],[6,28,54,80,106,132,158],[6,32,58,84,110,136,162],[6,26,54,82,110,138,166],[6,30,58,86,114,142,170]],G15:1335,G18:7973,G15_MASK:21522,getBCHTypeInfo:function(a){for(var b=a<<10;f.getBCHDigit(b)-f.getBCHDigit(f.G15)>=0;)b^=f.G15<<f.getBCHDigit(b)-f.getBCHDigit(f.G15);return(a<<10|b)^f.G15_MASK},getBCHTypeNumber:function(a){for(var b=a<<12;f.getBCHDigit(b)-f.getBCHDigit(f.G18)>=0;)b^=f.G18<<f.getBCHDigit(b)-f.getBCHDigit(f.G18);return a<<12|b},getBCHDigit:function(a){for(var b=0;0!=a;)b++,a>>>=1;return b},getPatternPosition:function(a){return f.PATTERN_POSITION_TABLE[a-1]},getMask:function(a,b,c){switch(a){case e.PATTERN000:return 0==(b+c)%2;case e.PATTERN001:return 0==b%2;case e.PATTERN010:return 0==c%3;case e.PATTERN011:return 0==(b+c)%3;case e.PATTERN100:return 0==(Math.floor(b/2)+Math.floor(c/3))%2;case e.PATTERN101:return 0==b*c%2+b*c%3;case e.PATTERN110:return 0==(b*c%2+b*c%3)%2;case e.PATTERN111:return 0==(b*c%3+(b+c)%2)%2;default:throw new Error("bad maskPattern:"+a)}},getErrorCorrectPolynomial:function(a){for(var b=new i([1],0),c=0;a>c;c++)b=b.multiply(new i([1,g.gexp(c)],0));return b},getLengthInBits:function(a,b){if(b>=1&&10>b)switch(a){case c.MODE_NUMBER:return 10;case c.MODE_ALPHA_NUM:return 9;case c.MODE_8BIT_BYTE:return 8;case c.MODE_KANJI:return 8;default:throw new Error("mode:"+a)}else if(27>b)switch(a){case c.MODE_NUMBER:return 12;case c.MODE_ALPHA_NUM:return 11;case c.MODE_8BIT_BYTE:return 16;case c.MODE_KANJI:return 10;default:throw new Error("mode:"+a)}else{if(!(41>b))throw new Error("type:"+b);switch(a){case c.MODE_NUMBER:return 14;case c.MODE_ALPHA_NUM:return 13;case c.MODE_8BIT_BYTE:return 16;case c.MODE_KANJI:return 12;default:throw new Error("mode:"+a)}}},getLostPoint:function(a){for(var b=a.getModuleCount(),c=0,d=0;b>d;d++)for(var e=0;b>e;e++){for(var f=0,g=a.isDark(d,e),h=-1;1>=h;h++)if(!(0>d+h||d+h>=b))for(var i=-1;1>=i;i++)0>e+i||e+i>=b||(0!=h||0!=i)&&g==a.isDark(d+h,e+i)&&f++;f>5&&(c+=3+f-5)}for(var d=0;b-1>d;d++)for(var e=0;b-1>e;e++){var j=0;a.isDark(d,e)&&j++,a.isDark(d+1,e)&&j++,a.isDark(d,e+1)&&j++,a.isDark(d+1,e+1)&&j++,(0==j||4==j)&&(c+=3)}for(var d=0;b>d;d++)for(var e=0;b-6>e;e++)a.isDark(d,e)&&!a.isDark(d,e+1)&&a.isDark(d,e+2)&&a.isDark(d,e+3)&&a.isDark(d,e+4)&&!a.isDark(d,e+5)&&a.isDark(d,e+6)&&(c+=40);for(var e=0;b>e;e++)for(var d=0;b-6>d;d++)a.isDark(d,e)&&!a.isDark(d+1,e)&&a.isDark(d+2,e)&&a.isDark(d+3,e)&&a.isDark(d+4,e)&&!a.isDark(d+5,e)&&a.isDark(d+6,e)&&(c+=40);for(var k=0,e=0;b>e;e++)for(var d=0;b>d;d++)a.isDark(d,e)&&k++;var l=Math.abs(100*k/b/b-50)/5;return c+=10*l}},g={glog:function(a){if(1>a)throw new Error("glog("+a+")");return g.LOG_TABLE[a]},gexp:function(a){for(;0>a;)a+=255;for(;a>=256;)a-=255;return g.EXP_TABLE[a]},EXP_TABLE:new Array(256),LOG_TABLE:new Array(256)},h=0;8>h;h++)g.EXP_TABLE[h]=1<<h;for(var h=8;256>h;h++)g.EXP_TABLE[h]=g.EXP_TABLE[h-4]^g.EXP_TABLE[h-5]^g.EXP_TABLE[h-6]^g.EXP_TABLE[h-8];for(var h=0;255>h;h++)g.LOG_TABLE[g.EXP_TABLE[h]]=h;i.prototype={get:function(a){return this.num[a]},getLength:function(){return this.num.length},multiply:function(a){for(var b=new Array(this.getLength()+a.getLength()-1),c=0;c<this.getLength();c++)for(var d=0;d<a.getLength();d++)b[c+d]^=g.gexp(g.glog(this.get(c))+g.glog(a.get(d)));return new i(b,0)},mod:function(a){if(this.getLength()-a.getLength()<0)return this;for(var b=g.glog(this.get(0))-g.glog(a.get(0)),c=new Array(this.getLength()),d=0;d<this.getLength();d++)c[d]=this.get(d);for(var d=0;d<a.getLength();d++)c[d]^=g.gexp(g.glog(a.get(d))+b);return new i(c,0).mod(a)}},j.RS_BLOCK_TABLE=[[1,26,19],[1,26,16],[1,26,13],[1,26,9],[1,44,34],[1,44,28],[1,44,22],[1,44,16],[1,70,55],[1,70,44],[2,35,17],[2,35,13],[1,100,80],[2,50,32],[2,50,24],[4,25,9],[1,134,108],[2,67,43],[2,33,15,2,34,16],[2,33,11,2,34,12],[2,86,68],[4,43,27],[4,43,19],[4,43,15],[2,98,78],[4,49,31],[2,32,14,4,33,15],[4,39,13,1,40,14],[2,121,97],[2,60,38,2,61,39],[4,40,18,2,41,19],[4,40,14,2,41,15],[2,146,116],[3,58,36,2,59,37],[4,36,16,4,37,17],[4,36,12,4,37,13],[2,86,68,2,87,69],[4,69,43,1,70,44],[6,43,19,2,44,20],[6,43,15,2,44,16],[4,101,81],[1,80,50,4,81,51],[4,50,22,4,51,23],[3,36,12,8,37,13],[2,116,92,2,117,93],[6,58,36,2,59,37],[4,46,20,6,47,21],[7,42,14,4,43,15],[4,133,107],[8,59,37,1,60,38],[8,44,20,4,45,21],[12,33,11,4,34,12],[3,145,115,1,146,116],[4,64,40,5,65,41],[11,36,16,5,37,17],[11,36,12,5,37,13],[5,109,87,1,110,88],[5,65,41,5,66,42],[5,54,24,7,55,25],[11,36,12],[5,122,98,1,123,99],[7,73,45,3,74,46],[15,43,19,2,44,20],[3,45,15,13,46,16],[1,135,107,5,136,108],[10,74,46,1,75,47],[1,50,22,15,51,23],[2,42,14,17,43,15],[5,150,120,1,151,121],[9,69,43,4,70,44],[17,50,22,1,51,23],[2,42,14,19,43,15],[3,141,113,4,142,114],[3,70,44,11,71,45],[17,47,21,4,48,22],[9,39,13,16,40,14],[3,135,107,5,136,108],[3,67,41,13,68,42],[15,54,24,5,55,25],[15,43,15,10,44,16],[4,144,116,4,145,117],[17,68,42],[17,50,22,6,51,23],[19,46,16,6,47,17],[2,139,111,7,140,112],[17,74,46],[7,54,24,16,55,25],[34,37,13],[4,151,121,5,152,122],[4,75,47,14,76,48],[11,54,24,14,55,25],[16,45,15,14,46,16],[6,147,117,4,148,118],[6,73,45,14,74,46],[11,54,24,16,55,25],[30,46,16,2,47,17],[8,132,106,4,133,107],[8,75,47,13,76,48],[7,54,24,22,55,25],[22,45,15,13,46,16],[10,142,114,2,143,115],[19,74,46,4,75,47],[28,50,22,6,51,23],[33,46,16,4,47,17],[8,152,122,4,153,123],[22,73,45,3,74,46],[8,53,23,26,54,24],[12,45,15,28,46,16],[3,147,117,10,148,118],[3,73,45,23,74,46],[4,54,24,31,55,25],[11,45,15,31,46,16],[7,146,116,7,147,117],[21,73,45,7,74,46],[1,53,23,37,54,24],[19,45,15,26,46,16],[5,145,115,10,146,116],[19,75,47,10,76,48],[15,54,24,25,55,25],[23,45,15,25,46,16],[13,145,115,3,146,116],[2,74,46,29,75,47],[42,54,24,1,55,25],[23,45,15,28,46,16],[17,145,115],[10,74,46,23,75,47],[10,54,24,35,55,25],[19,45,15,35,46,16],[17,145,115,1,146,116],[14,74,46,21,75,47],[29,54,24,19,55,25],[11,45,15,46,46,16],[13,145,115,6,146,116],[14,74,46,23,75,47],[44,54,24,7,55,25],[59,46,16,1,47,17],[12,151,121,7,152,122],[12,75,47,26,76,48],[39,54,24,14,55,25],[22,45,15,41,46,16],[6,151,121,14,152,122],[6,75,47,34,76,48],[46,54,24,10,55,25],[2,45,15,64,46,16],[17,152,122,4,153,123],[29,74,46,14,75,47],[49,54,24,10,55,25],[24,45,15,46,46,16],[4,152,122,18,153,123],[13,74,46,32,75,47],[48,54,24,14,55,25],[42,45,15,32,46,16],[20,147,117,4,148,118],[40,75,47,7,76,48],[43,54,24,22,55,25],[10,45,15,67,46,16],[19,148,118,6,149,119],[18,75,47,31,76,48],[34,54,24,34,55,25],[20,45,15,61,46,16]],j.getRSBlocks=function(a,b){var c=j.getRsBlockTable(a,b);if(void 0==c)throw new Error("bad rs block @ typeNumber:"+a+"/errorCorrectLevel:"+b);for(var d=c.length/3,e=[],f=0;d>f;f++)for(var g=c[3*f+0],h=c[3*f+1],i=c[3*f+2],k=0;g>k;k++)e.push(new j(h,i));return e},j.getRsBlockTable=function(a,b){switch(b){case d.L:return j.RS_BLOCK_TABLE[4*(a-1)+0];case d.M:return j.RS_BLOCK_TABLE[4*(a-1)+1];case d.Q:return j.RS_BLOCK_TABLE[4*(a-1)+2];case d.H:return j.RS_BLOCK_TABLE[4*(a-1)+3];default:return void 0}},k.prototype={get:function(a){var b=Math.floor(a/8);return 1==(1&this.buffer[b]>>>7-a%8)},put:function(a,b){for(var c=0;b>c;c++)this.putBit(1==(1&a>>>b-c-1))},getLengthInBits:function(){return this.length},putBit:function(a){var b=Math.floor(this.length/8);this.buffer.length<=b&&this.buffer.push(0),a&&(this.buffer[b]|=128>>>this.length%8),this.length++}};var l=[[17,14,11,7],[32,26,20,14],[53,42,32,24],[78,62,46,34],[106,84,60,44],[134,106,74,58],[154,122,86,64],[192,152,108,84],[230,180,130,98],[271,213,151,119],[321,251,177,137],[367,287,203,155],[425,331,241,177],[458,362,258,194],[520,412,292,220],[586,450,322,250],[644,504,364,280],[718,560,394,310],[792,624,442,338],[858,666,482,382],[929,711,509,403],[1003,779,565,439],[1091,857,611,461],[1171,911,661,511],[1273,997,715,535],[1367,1059,751,593],[1465,1125,805,625],[1528,1190,868,658],[1628,1264,908,698],[1732,1370,982,742],[1840,1452,1030,790],[1952,1538,1112,842],[2068,1628,1168,898],[2188,1722,1228,958],[2303,1809,1283,983],[2431,1911,1351,1051],[2563,1989,1423,1093],[2699,2099,1499,1139],[2809,2213,1579,1219],[2953,2331,1663,1273]],o=function(){var a=function(a,b){this._el=a,this._htOption=b};return a.prototype.draw=function(a){function g(a,b){var c=document.createElementNS("http://www.w3.org/2000/svg",a);for(var d in b)b.hasOwnProperty(d)&&c.setAttribute(d,b[d]);return c}var b=this._htOption,c=this._el,d=a.getModuleCount();Math.floor(b.width/d),Math.floor(b.height/d),this.clear();var h=g("svg",{viewBox:"0 0 "+String(d)+" "+String(d),width:"100%",height:"100%",fill:b.colorLight});h.setAttributeNS("http://www.w3.org/2000/xmlns/","xmlns:xlink","http://www.w3.org/1999/xlink"),c.appendChild(h),h.appendChild(g("rect",{fill:b.colorDark,width:"1",height:"1",id:"template"}));for(var i=0;d>i;i++)for(var j=0;d>j;j++)if(a.isDark(i,j)){var k=g("use",{x:String(i),y:String(j)});k.setAttributeNS("http://www.w3.org/1999/xlink","href","#template"),h.appendChild(k)}},a.prototype.clear=function(){for(;this._el.hasChildNodes();)this._el.removeChild(this._el.lastChild)},a}(),p="svg"===document.documentElement.tagName.toLowerCase(),q=p?o:m()?function(){function a(){this._elImage.src=this._elCanvas.toDataURL("image/png"),this._elImage.style.display="block",this._elCanvas.style.display="none"}function d(a,b){var c=this;if(c._fFail=b,c._fSuccess=a,null===c._bSupportDataURI){var d=document.createElement("img"),e=function(){c._bSupportDataURI=!1,c._fFail&&_fFail.call(c)},f=function(){c._bSupportDataURI=!0,c._fSuccess&&c._fSuccess.call(c)};return d.onabort=e,d.onerror=e,d.onload=f,d.src="data:image/gif;base64,iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==",void 0}c._bSupportDataURI===!0&&c._fSuccess?c._fSuccess.call(c):c._bSupportDataURI===!1&&c._fFail&&c._fFail.call(c)}if(this._android&&this._android<=2.1){var b=1/window.devicePixelRatio,c=CanvasRenderingContext2D.prototype.drawImage;CanvasRenderingContext2D.prototype.drawImage=function(a,d,e,f,g,h,i,j){if("nodeName"in a&&/img/i.test(a.nodeName))for(var l=arguments.length-1;l>=1;l--)arguments[l]=arguments[l]*b;else"undefined"==typeof j&&(arguments[1]*=b,arguments[2]*=b,arguments[3]*=b,arguments[4]*=b);c.apply(this,arguments)}}var e=function(a,b){this._bIsPainted=!1,this._android=n(),this._htOption=b,this._elCanvas=document.createElement("canvas"),this._elCanvas.width=b.width,this._elCanvas.height=b.height,a.appendChild(this._elCanvas),this._el=a,this._oContext=this._elCanvas.getContext("2d"),this._bIsPainted=!1,this._elImage=document.createElement("img"),this._elImage.style.display="none",this._el.appendChild(this._elImage),this._bSupportDataURI=null};return e.prototype.draw=function(a){var b=this._elImage,c=this._oContext,d=this._htOption,e=a.getModuleCount(),f=d.width/e,g=d.height/e,h=Math.round(f),i=Math.round(g);b.style.display="none",this.clear();for(var j=0;e>j;j++)for(var k=0;e>k;k++){var l=a.isDark(j,k),m=k*f,n=j*g;c.strokeStyle=l?d.colorDark:d.colorLight,c.lineWidth=1,c.fillStyle=l?d.colorDark:d.colorLight,c.fillRect(m,n,f,g),c.strokeRect(Math.floor(m)+.5,Math.floor(n)+.5,h,i),c.strokeRect(Math.ceil(m)-.5,Math.ceil(n)-.5,h,i)}this._bIsPainted=!0},e.prototype.makeImage=function(){this._bIsPainted&&d.call(this,a)},e.prototype.isPainted=function(){return this._bIsPainted},e.prototype.clear=function(){this._oContext.clearRect(0,0,this._elCanvas.width,this._elCanvas.height),this._bIsPainted=!1},e.prototype.round=function(a){return a?Math.floor(1e3*a)/1e3:a},e}():function(){var a=function(a,b){this._el=a,this._htOption=b};return a.prototype.draw=function(a){for(var b=this._htOption,c=this._el,d=a.getModuleCount(),e=Math.floor(b.width/d),f=Math.floor(b.height/d),g=['<table style="border:0;border-collapse:collapse;">'],h=0;d>h;h++){g.push("<tr>");for(var i=0;d>i;i++)g.push('<td style="border:0;border-collapse:collapse;padding:0;margin:0;width:'+e+"px;height:"+f+"px;background-color:"+(a.isDark(h,i)?b.colorDark:b.colorLight)+';"></td>');g.push("</tr>")}g.push("</table>"),c.innerHTML=g.join("");var j=c.childNodes[0],k=(b.width-j.offsetWidth)/2,l=(b.height-j.offsetHeight)/2;k>0&&l>0&&(j.style.margin=l+"px "+k+"px")},a.prototype.clear=function(){this._el.innerHTML=""},a}();QRCode=function(a,b){if(this._htOption={width:256,height:256,typeNumber:4,colorDark:"#000000",colorLight:"#ffffff",correctLevel:d.H},"string"==typeof b&&(b={text:b}),b)for(var c in b)this._htOption[c]=b[c];"string"==typeof a&&(a=document.getElementById(a)),this._android=n(),this._el=a,this._oQRCode=null,this._oDrawing=new q(this._el,this._htOption),this._htOption.text&&this.makeCode(this._htOption.text)},QRCode.prototype.makeCode=function(a){this._oQRCode=new b(r(a,this._htOption.correctLevel),this._htOption.correctLevel),this._oQRCode.addData(a),this._oQRCode.make(),this._el.title=a,this._oDrawing.draw(this._oQRCode),this.makeImage()},QRCode.prototype.makeImage=function(){"function"==typeof this._oDrawing.makeImage&&(!this._android||this._android>=3)&&this._oDrawing.makeImage()},QRCode.prototype.clear=function(){this._oDrawing.clear()},QRCode.CorrectLevel=d}();
+
+function showBC(idx) {
+  var item = db.items[parseInt(idx)];
+  if (!item) return;
+  document.getElementById('bc-title').textContent = item.name;
+  document.getElementById('bc-sub').textContent = 'ID: ' + item.id;
+  var d = document.getElementById('bc-display');
+  d.innerHTML = '';
+  document.getElementById('modal-bc').classList.add('open');
+  setTimeout(function() {
+    try {
+      new QRCode(d, {
+        text: item.id,
+        width: 220,
+        height: 220,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.M
+      });
+    } catch(e) {
+      d.innerHTML = '<div style="color:#c0392b;font-size:13px;padding:10px">Error: ' + e.message + '</div>';
+    }
+  }, 50);
+}
+
+function printBC() {
+  var title = document.getElementById('bc-title').textContent;
+  var sub = document.getElementById('bc-sub').textContent;
+  var canvas = document.querySelector('#bc-display canvas');
+  var img = canvas ? canvas.toDataURL('image/png') : '';
+  var w = window.open('', '_blank', 'width=400,height=450');
+  var parts = [
+    '<!DOCTYPE html><html><head><title>', title, '</title></head>',
+    '<body style="text-align:center;font-family:Arial,sans-serif;padding:30px">',
+    '<h2>', title, '</h2>',
+    '<p style="color:#888;margin:8px 0">', sub, '</p>',
+    img ? '<img src="' + img + '" width="220" style="display:block;margin:16px auto">' : '',
+    '<p style="font-size:16px;font-weight:700;letter-spacing:1px">', sub.replace('ID: ',''), '</p>',
+    '</body></html>'
+  ];
+  w.document.write(parts.join(''));
+  w.document.close();
+}
+
+// ─── Transfer ─────────────────────────────────────────────────────────────
+function showTransferModal(item, emp, job) {
+  document.getElementById('transfer-title').textContent = esc(item.name) + ' is checked out';
+  document.getElementById('transfer-info').innerHTML =
+    '👤 Currently with: <strong>' + esc(item.employee) + '</strong><br>' +
+    '💼 Job: <strong>' + esc(item.job) + '</strong><br>' +
+    '🕐 Since: ' + esc(item.since || '—');
+
+  // Populate employee select
+  var sel = document.getElementById('transfer-emp');
+  sel.innerHTML = '<option value="">Select employee...</option>';
+  db.employees.forEach(function(e) {
+    if (e.name !== item.employee) {
+      var o = document.createElement('option');
+      o.value = e.name; o.textContent = e.name;
+      sel.appendChild(o);
+    }
+  });
+
+  // Pre-fill job if scanned with one
+  document.getElementById('transfer-job').value = job || item.job || '';
+
+  // Store item ref for confirm actions
+  window._transferItem = item;
+  document.getElementById('modal-transfer').classList.add('open');
+}
+
+function confirmTransfer() {
+  var item = window._transferItem;
+  var toEmp = document.getElementById('transfer-emp').value;
+  var job = document.getElementById('transfer-job').value.trim();
+  if (!toEmp) { alert('Please select an employee to transfer to.'); return; }
+  if (!job) { alert('Please enter a job number.'); return; }
+  pendingAction = { type: 'transfer', item: item, fromEmp: item.employee, toEmp: toEmp, job: job };
+  closeModal('modal-transfer');
+  document.getElementById('conf-title').textContent = 'Confirm transfer';
+  document.getElementById('conf-body').innerHTML =
+    'Transfer <strong>' + esc(item.name) + '</strong> from <strong>' + esc(item.employee) +
+    '</strong> to <strong>' + esc(toEmp) + '</strong> on job <strong>' + esc(job) + '</strong>?';
+  document.getElementById('conf-btn').textContent = 'Transfer';
+  document.getElementById('conf-btn').className = 'btn primary';
+  document.getElementById('modal-confirm').classList.add('open');
+}
+
+function confirmReturn() {
+  var item = window._transferItem;
+  pendingAction = { type: 'in', item: item };
+  closeModal('modal-transfer');
+  document.getElementById('conf-title').textContent = 'Return item';
+  document.getElementById('conf-body').innerHTML =
+    'Return <strong>' + esc(item.name) + '</strong> to storage?<br>' +
+    '<small style="color:#aaa">Currently with ' + esc(item.employee) + '</small>';
+  document.getElementById('conf-btn').textContent = 'Return to storage';
+  document.getElementById('conf-btn').className = 'btn success';
+  document.getElementById('modal-confirm').classList.add('open');
+}
+
+// ─── Modals ────────────────────────────────────────────────────────────────
+function closeModal(id) { document.getElementById(id).classList.remove('open'); if (id === 'modal-confirm') pendingAction = null; }
+document.querySelectorAll('.modal-bg').forEach(function(m) { m.addEventListener('click', function(e) { if (e.target === this) closeModal(this.id); }); });
+document.getElementById('new-emp').addEventListener('keydown', function(e) { if (e.key === 'Enter') addEmp(); });
+document.getElementById('manual-code').addEventListener('keydown', function(e) { if (e.key === 'Enter') processCode(e.target.value.trim()); });
+
+// ─── Setup ─────────────────────────────────────────────────────────────────
+function showSetup() {
+  document.getElementById('setup-screen').style.display = 'flex';
+  document.getElementById('main-app').style.display = 'none';
+}
+
+function hideSetup() {
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('main-app').style.display = 'block';
+}
+
+function showSetupErr(msg) {
+  var el = document.getElementById('setup-err');
+  el.style.display = 'block';
+  el.textContent = '⚠ ' + msg;
+  document.getElementById('setup-btn').textContent = 'Connect & Start';
+  document.getElementById('setup-btn').disabled = false;
+}
+
+function connectGist() {
+  var token = document.getElementById('setup-token').value.trim();
+  if (!token) { showSetupErr('Please paste your GitHub token.'); return; }
+  if (!token.startsWith('ghp_') && !token.startsWith('github_pat_')) {
+    showSetupErr('That doesn\'t look like a GitHub token. It should start with ghp_ or github_pat_');
+    return;
+  }
+  document.getElementById('setup-btn').textContent = 'Creating Gist...';
+  document.getElementById('setup-btn').disabled = true;
+  document.getElementById('setup-err').style.display = 'none';
+
+  // Create a new Gist
+  fetch('https://api.github.com/gists', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'token ' + token,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      description: 'Equipment Tracker Data',
+      public: false,
+      files: { 'equipdb.json': { content: JSON.stringify({ items: [], employees: [], log: [], bookings: [] }) } }
+    })
+  })
+  .then(function(r) {
+    if (!r.ok) return r.json().then(function(e) { throw new Error(e.message || 'HTTP ' + r.status); });
+    return r.json();
+  })
+  .then(function(gist) {
+    GIST_TOKEN = token;
+    GIST_ID = gist.id;
+    GIST_TOKEN = token; GIST_ID = gist.id; IS_ADMIN = true;
+    localStorage.setItem('et-gh-token', token);
+    localStorage.setItem('et-gist-id', gist.id);
+    hideSetup();
+    loadCloud();
+    setTimeout(function() {
+      var msg = '✅ Connected!\n\nNow open the HTML file in a text editor and find these two lines near the top of the script:\n\n  var GIST_ID = \'\';\n  var GIST_TOKEN_STORED = \'\';\n\nReplace them with:\n\n  var GIST_ID = \'' + gist.id + '\';\n  var GIST_TOKEN_STORED = \'' + token + '\';\n\nThen re-upload to GitHub Pages. After that, everyone just opens the link with no setup needed.';
+      alert(msg);
+    }, 500);
+  })
+  .catch(function(e) {
+    showSetupErr('Failed: ' + e.message + '. Check your token has the gist scope.');
+  });
+}
+
+function connectExisting() {
+  var token = document.getElementById('setup-token').value.trim();
+  var gistId = document.getElementById('setup-gist-id').value.trim();
+  if (!token || !gistId) { showSetupErr('Enter both token and Gist ID.'); return; }
+  GIST_TOKEN = token;
+  GIST_ID = gistId;
+  IS_ADMIN = true;
+  localStorage.setItem('et-gh-token', token);
+  localStorage.setItem('et-gist-id', gistId);
+  hideSetup();
+  loadCloud();
+}
+
+function toggleAdmin() {
+  if (IS_ADMIN) {
+    IS_ADMIN = false;
+    renderAll();
+    toast('Admin mode off');
+  } else {
+    var pw = prompt('Enter admin password:');
+    if (!pw) return;
+    if (pw === ADMIN_PASSWORD) {
+      IS_ADMIN = true;
+      renderAll();
+      toast('Admin mode on ✓');
+    } else {
+      alert('Incorrect password.');
+    }
+  }
+}
+
+// ─── Boot ──────────────────────────────────────────────────────────────────
+window.onerror = function(msg, src, line, col, err) {
+  console.error('JS Error:', msg, 'line', line);
+  return false;
+};
+window.addEventListener('DOMContentLoaded', function() {
+  // If hardcoded config exists, use it
+  if (GIST_ID && GIST_TOKEN_STORED) {
+    GIST_TOKEN = GIST_TOKEN_STORED;
+    IS_ADMIN = false;
+    loadCloud();
+  } else {
+    // First time setup
+    var token = localStorage.getItem('et-gh-token');
+    var gistId = localStorage.getItem('et-gist-id');
+    if (token && gistId) {
+      GIST_TOKEN = token; GIST_ID = gistId; IS_ADMIN = true;
+      loadCloud();
+    } else {
+      showSetup();
+    }
+  }
+});
+</script>
+
+<!-- TRANSFER MODAL -->
+</body>
+</html>
