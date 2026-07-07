@@ -197,9 +197,47 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
         <label>Item ID</label>
         <div class="row"><input type="text" id="new-item-id" placeholder="e.g. TOOL-001"><button class="btn sm" onclick="autoId()">Auto</button></div>
       </div>
+      <div class="field">
+        <label>Colour (for calendar)</label>
+        <div class="row" style="flex-wrap:wrap;gap:8px" id="colour-picker">
+          <button type="button" class="colour-btn active" data-colour="#f59e0b" onclick="selectColour(this)" style="background:#f59e0b;width:32px;height:32px;border-radius:50%;border:3px solid #1a1a1a;cursor:pointer"></button>
+          <button type="button" class="colour-btn" data-colour="#ef4444" onclick="selectColour(this)" style="background:#ef4444;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+          <button type="button" class="colour-btn" data-colour="#3b82f6" onclick="selectColour(this)" style="background:#3b82f6;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+          <button type="button" class="colour-btn" data-colour="#22c55e" onclick="selectColour(this)" style="background:#22c55e;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+          <button type="button" class="colour-btn" data-colour="#a855f7" onclick="selectColour(this)" style="background:#a855f7;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+          <button type="button" class="colour-btn" data-colour="#ec4899" onclick="selectColour(this)" style="background:#ec4899;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+          <button type="button" class="colour-btn" data-colour="#14b8a6" onclick="selectColour(this)" style="background:#14b8a6;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+          <button type="button" class="colour-btn" data-colour="#f97316" onclick="selectColour(this)" style="background:#f97316;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+          <button type="button" class="colour-btn" data-colour="#6366f1" onclick="selectColour(this)" style="background:#6366f1;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+          <button type="button" class="colour-btn" data-colour="#1a1a1a" onclick="selectColour(this)" style="background:#1a1a1a;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+        </div>
+      </div>
       <button class="btn primary full" onclick="addItem()">Add item</button>
     </div>
     <div id="no-admin-items" class="card" style="display:none;text-align:center;color:#aaa;font-size:13px;margin-bottom:10px">🔒 Admin access required to add items</div>
+
+    <div class="card" id="csv-import-card" style="margin-bottom:10px;display:none">
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px">📂 Import from CSV</div>
+      <div id="csv-drop-zone" style="border:2px dashed #ddd;border-radius:8px;padding:16px;text-align:center;cursor:pointer;background:#fafafa"
+        ondragover="event.preventDefault();this.style.borderColor='#1a1a1a'"
+        ondragleave="this.style.borderColor='#ddd'"
+        ondrop="handleCSVDrop(event)"
+        onclick="document.getElementById('csv-file-input').click()">
+        <div style="font-size:24px;margin-bottom:6px">📄</div>
+        <div style="font-size:13px;font-weight:700">Drag & drop CSV or tap to browse</div>
+        <div style="font-size:11px;color:#aaa;margin-top:4px">CSV must have columns: name, id (and optionally: colour)</div>
+      </div>
+      <input type="file" id="csv-file-input" accept=".csv" style="display:none" onchange="handleCSVFile(this)">
+      <div id="csv-preview" style="display:none;margin-top:10px">
+        <div style="font-size:12px;font-weight:700;color:#555;margin-bottom:6px" id="csv-preview-label"></div>
+        <div id="csv-preview-list" style="max-height:160px;overflow-y:auto;font-size:12px;border:1px solid #eee;border-radius:6px;padding:6px"></div>
+        <div class="row" style="margin-top:8px;gap:8px">
+          <button class="btn primary" style="flex:1" onclick="confirmCSVImport()">Import all</button>
+          <button class="btn" style="flex:1" onclick="cancelCSVImport()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <div id="items-list"></div>
   </div>
 
@@ -282,9 +320,9 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
 </div>
 
 <script>
-// ─── CONFIG — fill these in after first JSONBin setup ─────────────────────
-var JSONBIN_BIN_ID = '6a42f995f5f4af5e29445bc9';
-var JSONBIN_API_KEY = '$2a$10$TUaKEXHZllJojAF/.HiGlOEasCacwqhdizjrUJa1oJTQEgNY.7kqa';
+// ─── CONFIG ────────────────────────────────────────────────────────────────
+var SUPABASE_URL = 'https://anstffqptxcutouzczkp.supabase.co';
+var SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFuc3RmZnFwdHhjdXRvdXpjemtwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMzODc3NzYsImV4cCI6MjA5ODk2Mzc3Nn0.d9gM68i_eqD1XBW-VjGvcx3DpdbSNeP_B9sXqmmW_sM';
 var ADMIN_PASSWORD = 'novos2024';
 
 // ─── State ─────────────────────────────────────────────────────────────────
@@ -309,37 +347,87 @@ function setSS(state, lbl) { var d = document.getElementById('sync-dot'); var l 
 
 // ─── JSONBin Sync ──────────────────────────────────────────────────────────
 function loadCloud() {
-  if (!JSONBIN_BIN_ID || !JSONBIN_API_KEY) { loadLocal(); renderAll(); setSS('', 'Local only'); return; }
   setSS('busy', 'Syncing...');
-  fetch('https://api.jsonbin.io/v3/b/' + JSONBIN_BIN_ID + '/latest', {
-    headers: { 'X-Master-Key': JSONBIN_API_KEY, 'X-Bin-Meta': 'false' }
+  fetch(SUPABASE_URL + '/rest/v1/equipdata?id=eq.1&select=data', {
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': 'Bearer ' + SUPABASE_KEY
+    }
   })
   .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-  .then(function(data) {
-    var d = data.record || data;
-    if (d && typeof d === 'object') {
-      db = d;
-      if (!db.items) db.items = [];
-      if (!db.employees) db.employees = [];
-      if (!db.log) db.log = [];
-      if (!db.bookings) db.bookings = [];
+  .then(function(rows) {
+    if (rows && rows.length > 0 && rows[0].data) {
+      var d = JSON.parse(rows[0].data);
+      if (d && typeof d === 'object') {
+        db = d;
+        if (!db.items) db.items = [];
+        if (!db.employees) db.employees = [];
+        if (!db.log) db.log = [];
+        if (!db.bookings) db.bookings = [];
+      }
+    } else {
+      // No data yet - create first row
+      db = { items: [], employees: [], log: [], bookings: [] };
+      initCloud();
     }
     saveLocal(); setSS('ok', 'Synced'); renderAll();
   })
-  .catch(function(e) { setSS('err', 'Offline'); loadLocal(); renderAll(); });
+  .catch(function(e) {
+    console.error('Sync error:', e.message);
+    setSS('err', 'Offline');
+    toast('⚠ Sync error: ' + e.message);
+    loadLocal(); renderAll();
+  });
+}
+
+function initCloud() {
+  fetch(SUPABASE_URL + '/rest/v1/equipdata', {
+    method: 'POST',
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': 'Bearer ' + SUPABASE_KEY,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal'
+    },
+    body: JSON.stringify({ id: 1, data: JSON.stringify(db) })
+  }).catch(function(e) { console.error('Init error:', e); });
 }
 
 function saveCloud() {
   saveLocal();
-  if (!JSONBIN_BIN_ID || !JSONBIN_API_KEY) return;
   setSS('busy', 'Saving...');
-  fetch('https://api.jsonbin.io/v3/b/' + JSONBIN_BIN_ID, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_API_KEY },
-    body: JSON.stringify(db)
+  fetch(SUPABASE_URL + '/rest/v1/equipdata?id=eq.1', {
+    method: 'PATCH',
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': 'Bearer ' + SUPABASE_KEY,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal'
+    },
+    body: JSON.stringify({ data: JSON.stringify(db) })
   })
-  .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); setSS('ok', 'Saved ✓'); })
-  .catch(function() { setSS('err', 'Save failed'); toast('⚠ Could not save to cloud'); });
+  .then(function(r) {
+    if (r.status === 404 || r.status === 406) {
+      // Row doesn't exist yet - insert it
+      return fetch(SUPABASE_URL + '/rest/v1/equipdata', {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': 'Bearer ' + SUPABASE_KEY,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({ id: 1, data: JSON.stringify(db) })
+      });
+    }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    setSS('ok', 'Saved ✓');
+  })
+  .then(function() { setSS('ok', 'Saved ✓'); })
+  .catch(function(e) {
+    setSS('err', 'Save failed');
+    toast('⚠ Save failed: ' + e.message);
+  });
 }
 
 function saveLocal() { try { localStorage.setItem('et-db', JSON.stringify(db)); } catch(e) {} }
@@ -376,6 +464,8 @@ function renderAll() {
   var clr = document.getElementById('clear-log-btn');
   if (ai) ai.style.display = IS_ADMIN ? 'block' : 'none';
   if (ni) ni.style.display = IS_ADMIN ? 'none' : 'block';
+  var ci = document.getElementById('csv-import-card');
+  if (ci) ci.style.display = IS_ADMIN ? 'block' : 'none';
   if (ae) ae.style.display = IS_ADMIN ? 'block' : 'none';
   if (ne) ne.style.display = IS_ADMIN ? 'none' : 'block';
   if (ab) ab.style.display = IS_ADMIN ? 'block' : 'none';
@@ -510,6 +600,17 @@ function confirmReturn() {
 }
 
 // ─── Calendar ──────────────────────────────────────────────────────────────
+function darkenCol(hex) {
+  var r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  r=Math.max(0,r-60);g=Math.max(0,g-60);b=Math.max(0,b-60);
+  return '#'+[r,g,b].map(function(x){return x.toString(16).padStart(2,'0');}).join('');
+}
+function lightenDarken(hex,amt) {
+  var r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  r=Math.min(255,Math.max(0,r+amt));g=Math.min(255,Math.max(0,g+amt));b=Math.min(255,Math.max(0,b+amt));
+  return '#'+[r,g,b].map(function(x){return x.toString(16).padStart(2,'0');}).join('');
+}
+
 function setView(v) { calView = v; document.getElementById('vt-month').classList.toggle('active', v==='month'); document.getElementById('vt-week').classList.toggle('active', v==='week'); renderCal(); }
 function calPrev() { if (calView==='month') { calMonth--; if (calMonth<0) { calMonth=11; calYear--; } } else calWeekStart=addDays(calWeekStart,-7); renderCal(); }
 function calNext() { if (calView==='month') { calMonth++; if (calMonth>11) { calMonth=0; calYear++; } } else calWeekStart=addDays(calWeekStart,7); renderCal(); }
@@ -527,7 +628,13 @@ function renderCal() {
     for (var d=1; d<=last.getDate(); d++) {
       var ds=calYear+'-'+String(calMonth+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
       var isT=ds===t, dayB=db.bookings.filter(function(b) { return b.status==='active'&&b.from<=ds&&b.to>=ds; });
-      var pills=dayB.slice(0,2).map(function(b) { var out=db.items.filter(function(i){return i.id===b.itemId&&i.status==='out';}).length>0; return '<span class="cpill'+(out?' active':'')+'">'+esc(b.itemName.length>8?b.itemName.slice(0,7)+'…':b.itemName)+'</span>'; }).join('');
+      var pills=dayB.slice(0,2).map(function(b) {
+        var bitem=db.items.filter(function(i){return i.id===b.itemId;})[0];
+        var col=(bitem&&bitem.colour)||'#f59e0b';
+        var isOut=bitem&&bitem.status==='out';
+        var textCol=isOut?'#fff':lightenDarken(col,-60);
+        return '<span class="cpill" style="background:'+(isOut?darkenCol(col):col)+';color:#fff">'+esc(b.itemName.length>8?b.itemName.slice(0,7)+'…':b.itemName)+'</span>';
+      }).join('');
       var more=dayB.length>2?'<span style="font-size:10px;color:#bbb;font-weight:700">+'+( dayB.length-2)+'</span>':'';
       h+='<div class="cal-cell'+(isT?' today':'')+(dayB.length?' hasb':'')+'" onclick="showDay(\''+ds+'\')"><div class="cal-date">'+d+'</div>'+pills+more+'</div>';
     }
@@ -607,12 +714,24 @@ function renderBkList() {
 // ─── Items ─────────────────────────────────────────────────────────────────
 function autoId() { document.getElementById('new-item-id').value='ITEM-'+String(db.items.length+1).padStart(3,'0'); }
 
+function selectColour(btn) {
+  document.querySelectorAll('.colour-btn').forEach(function(b) { b.style.border='2px solid transparent'; });
+  btn.style.border='3px solid #1a1a1a';
+  btn.classList.add('active');
+}
+
+function getSelectedColour() {
+  var active = document.querySelector('.colour-btn[style*="3px solid"]');
+  return active ? active.dataset.colour : '#f59e0b';
+}
+
 function addItem() {
   if(!IS_ADMIN){alert('Admin access required.');return;}
   var name=document.getElementById('new-item-name').value.trim(),id=document.getElementById('new-item-id').value.trim();
   if(!name||!id){alert('Enter item name and ID.');return;}
   for(var i=0;i<db.items.length;i++){if(db.items[i].id===id){alert('That Item ID already exists.');return;}}
-  db.items.push({id:id,name:name,status:'in',employee:null,job:null,since:null});
+  var colour = getSelectedColour();
+  db.items.push({id:id,name:name,colour:colour,status:'in',employee:null,job:null,since:null});
   document.getElementById('new-item-name').value=''; document.getElementById('new-item-id').value='';
   saveCloud(); renderItems(); renderBkForm(); updateHdr(); toast('Item added ✓');
 }
@@ -627,12 +746,13 @@ function renderItems() {
     var bb=nb?'<span class="badge booked" style="margin-left:4px">Booked '+nb.from+'</span>':'';
     html+='<div class="card" style="margin-bottom:8px"><div class="row-between">'
       +'<div style="flex:1;min-width:0"><div class="row" style="gap:6px;flex-wrap:wrap">'
-      +'<span class="sdot '+(item.status==='in'?'in':'out')+'"></span>'
+      +'<span class="sdot '+(item.status==='in'?'in':'out')+'" style="background:'+(item.colour||'#27ae60')+'"></span>'
       +'<span class="iname">'+esc(item.name)+'</span>'
       +'<span class="badge '+(item.status==='in'?'in':'out')+'">'+(item.status==='in'?'Available':'Out')+'</span>'+bb
       +'</div><div class="isub">ID: '+esc(item.id)+(item.status==='out'?' · '+esc(item.employee):'')+' </div></div>'
       +'<div class="row" style="gap:6px;margin-left:8px">'
       +'<button class="btn sm" data-idx="'+i+'" onclick="showQR(this.dataset.idx)">QR</button>'
+      +'<button class="btn sm" data-idx="'+i+'" onclick="showItemLog(this.dataset.idx)" style="font-size:11px">Log</button>'
       +(IS_ADMIN?'<button class="btn danger sm" data-idx="'+i+'" onclick="delItem(this.dataset.idx)">✕</button>':'')
       +'</div></div></div>';
   }
@@ -659,7 +779,9 @@ function addEmp() {
   if(!IS_ADMIN){alert('Admin access required.');return;}
   var name=document.getElementById('new-emp').value.trim(); if(!name) return;
   for(var i=0;i<db.employees.length;i++){if(db.employees[i].name.toLowerCase()===name.toLowerCase()){alert('Already exists.');return;}}
-  db.employees.push({name:name}); document.getElementById('new-emp').value='';
+  db.employees.push({name:name}); 
+  db.employees.sort(function(a,b){return a.name.localeCompare(b.name);});
+  document.getElementById('new-emp').value='';
   saveCloud(); renderEmps(); renderScanEmps(); renderBkForm(); toast('Added ✓');
 }
 
@@ -748,7 +870,122 @@ function printQR() {
 }
 
 // ─── Modals ────────────────────────────────────────────────────────────────
+// ─── CSV Import ────────────────────────────────────────────────────────────
+var csvPendingItems = [];
+
+function handleCSVDrop(e) {
+  e.preventDefault();
+  document.getElementById('csv-drop-zone').style.borderColor = '#ddd';
+  var file = e.dataTransfer.files[0];
+  if (file) parseCSV(file);
+}
+
+function handleCSVFile(input) {
+  var file = input.files[0];
+  if (file) parseCSV(file);
+  input.value = '';
+}
+
+function parseCSV(file) {
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var text = e.target.result;
+    var lines = text.split(/\r?\n/).filter(function(l) { return l.trim(); });
+    if (lines.length < 2) { alert('CSV must have a header row and at least one item.'); return; }
+    
+    // Parse header - find name and id columns (case insensitive)
+    var headers = lines[0].split(',').map(function(h) { return h.trim().toLowerCase().replace(/['"]/g,''); });
+    var nameIdx = headers.indexOf('name');
+    var idIdx = headers.indexOf('id');
+    var colourIdx = headers.indexOf('colour');
+    if (colourIdx === -1) colourIdx = headers.indexOf('color');
+    
+    // If no exact match try common variations
+    if (nameIdx === -1) nameIdx = headers.findIndex(function(h) { return h.includes('name') || h.includes('item') || h.includes('description'); });
+    if (idIdx === -1) idIdx = headers.findIndex(function(h) { return h.includes('id') || h.includes('code') || h.includes('number') || h.includes('asset'); });
+    
+    if (nameIdx === -1) { alert('Could not find a "name" column. Make sure your CSV has a column called "name", "item" or "description".'); return; }
+
+    var colours = ['#f59e0b','#ef4444','#3b82f6','#22c55e','#a855f7','#ec4899','#14b8a6','#f97316','#6366f1','#1a1a1a'];
+    csvPendingItems = [];
+    var skipped = 0;
+
+    for (var i = 1; i < lines.length; i++) {
+      var cols = parseCSVLine(lines[i]);
+      var name = nameIdx < cols.length ? cols[nameIdx].trim() : '';
+      var id = idIdx !== -1 && idIdx < cols.length ? cols[idIdx].trim() : '';
+      var colour = colourIdx !== -1 && colourIdx < cols.length ? cols[colourIdx].trim() : colours[csvPendingItems.length % colours.length];
+      if (!name) { skipped++; continue; }
+      // Auto-generate ID if missing
+      if (!id) id = 'ITEM-' + String(db.items.length + csvPendingItems.length + 1).padStart(3,'0');
+      // Skip if ID already exists
+      var exists = db.items.some(function(x) { return x.id === id; });
+      if (exists) { skipped++; continue; }
+      csvPendingItems.push({ name: name, id: id, colour: colour });
+    }
+
+    if (!csvPendingItems.length) { alert('No new items found. All items may already exist or the CSV format is incorrect.'); return; }
+
+    // Show preview
+    document.getElementById('csv-preview-label').textContent = csvPendingItems.length + ' items ready to import' + (skipped > 0 ? ' (' + skipped + ' skipped)' : '') + ':';
+    document.getElementById('csv-preview-list').innerHTML = csvPendingItems.map(function(item) {
+      return '<div style="padding:4px 6px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:8px">'
+        + '<span style="width:12px;height:12px;border-radius:50%;background:' + item.colour + ';display:inline-block;flex-shrink:0"></span>'
+        + '<span style="font-weight:700">' + esc(item.name) + '</span>'
+        + '<span style="color:#aaa;font-size:11px">' + esc(item.id) + '</span>'
+        + '</div>';
+    }).join('');
+    document.getElementById('csv-preview').style.display = 'block';
+  };
+  reader.readAsText(file);
+}
+
+function parseCSVLine(line) {
+  var cols = [], cur = '', inQuotes = false;
+  for (var i = 0; i < line.length; i++) {
+    var c = line[i];
+    if (c === '"') { inQuotes = !inQuotes; }
+    else if (c === ',' && !inQuotes) { cols.push(cur); cur = ''; }
+    else cur += c;
+  }
+  cols.push(cur);
+  return cols.map(function(c) { return c.replace(/^"|"$/g,'').trim(); });
+}
+
+function confirmCSVImport() {
+  if (!csvPendingItems.length) return;
+  csvPendingItems.forEach(function(item) {
+    db.items.push({ id: item.id, name: item.name, colour: item.colour, status: 'in', employee: null, job: null, since: null });
+  });
+  saveCloud(); renderItems(); renderBkForm(); updateHdr();
+  toast(csvPendingItems.length + ' items imported ✓');
+  cancelCSVImport();
+}
+
+function cancelCSVImport() {
+  csvPendingItems = [];
+  document.getElementById('csv-preview').style.display = 'none';
+  document.getElementById('csv-file-input').value = '';
+}
+
 function closeModal(id) { document.getElementById(id).classList.remove('open'); if(id==='modal-confirm') pendingAction=null; }
+
+function showItemLog(idx) {
+  var item = db.items[parseInt(idx)]; if (!item) return;
+  document.getElementById('item-log-title').textContent = item.name + ' — History';
+  var entries = db.log.filter(function(e) { return e.itemId === item.id; }).slice().reverse();
+  if (!entries.length) {
+    document.getElementById('item-log-body').innerHTML = '<div class="empty">No history for this item yet.</div>';
+  } else {
+    document.getElementById('item-log-body').innerHTML = entries.map(function(e) {
+      var badgeClass = e.action==='out'?'out':e.action==='transfer'?'transfer':'in';
+      var badgeLabel = e.action==='out'?'↑ Checked out':e.action==='transfer'?'⇄ Transferred':'↓ Returned';
+      var detail = e.action==='out'?esc(e.employee):e.action==='transfer'?esc(e.fromEmployee)+' → '+esc(e.employee):esc(e.employee);
+      return '<div class="log-row"><div class="row-between"><span class="badge '+badgeClass+'">'+badgeLabel+'</span><span class="log-time">'+e.time+'</span></div><div style="font-size:12px;color:#888;margin-top:4px">'+detail+'</div></div>';
+    }).join('');
+  }
+  document.getElementById('modal-item-log').classList.add('open');
+}
 document.querySelectorAll('.modal-bg').forEach(function(m) { m.addEventListener('click',function(e){if(e.target===this)closeModal(this.id);}); });
 document.getElementById('new-emp').addEventListener('keydown',function(e){if(e.key==='Enter')addEmp();});
 document.getElementById('manual-code').addEventListener('keydown',function(e){if(e.key==='Enter')processCode(e.target.value.trim());});
@@ -756,5 +993,17 @@ document.getElementById('manual-code').addEventListener('keydown',function(e){if
 // ─── Boot ──────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', function() { loadCloud(); });
 </script>
+<!-- ITEM LOG MODAL -->
+<div class="modal-bg" id="modal-item-log">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="row-between" style="margin-bottom:14px">
+      <h3 id="item-log-title">Item Log</h3>
+      <button class="btn sm" onclick="closeModal('modal-item-log')">Close</button>
+    </div>
+    <div id="item-log-body"></div>
+  </div>
+</div>
+
 </body>
 </html>
