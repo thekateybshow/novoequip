@@ -245,7 +245,12 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
   <div class="panel" id="panel-staff">
     <h2>Staff</h2>
     <div class="card" style="margin-bottom:10px" id="add-emp-card">
-      <div class="row"><input type="text" id="new-emp" placeholder="Full name"><button class="btn primary" onclick="addEmp()">Add</button></div>
+      <div class="field"><label>Full name</label><input type="text" id="new-emp" placeholder="Full name"></div>
+      <div class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <input type="checkbox" id="new-emp-can-book" style="width:auto;padding:0;margin:0" checked>
+        <label style="margin:0;font-size:13px;color:#1a1a1a;cursor:pointer" for="new-emp-can-book">Can create &amp; edit bookings</label>
+      </div>
+      <button class="btn primary full" onclick="addEmp()">Add employee</button>
     </div>
     <div id="no-admin-emp" class="card" style="display:none;text-align:center;color:#aaa;font-size:13px;margin-bottom:10px">🔒 Admin access required to add staff</div>
     <div id="emp-list"></div>
@@ -677,7 +682,11 @@ function renderBkForm() {
   bi.innerHTML='<option value="">Select...</option>';
   db.items.forEach(function(i){var status=i.status==='out'?' ⚠ OUT – '+(i.employee||'?'):' ✓ Available'; bi.innerHTML+='<option value="'+esc(i.id)+'">'+esc(i.name)+' ('+esc(i.id)+')'+status+'</option>';});
   be.innerHTML='<option value="">Select...</option>';
-  db.employees.forEach(function(e){be.innerHTML+='<option value="'+esc(e.name)+'">'+esc(e.name)+'</option>';});
+  db.employees.forEach(function(e){
+    var canBook = e.canBook !== false;
+    var label = esc(e.name) + (IS_ADMIN && !canBook ? ' 🚫' : '');
+    be.innerHTML+='<option value="'+esc(e.name)+'"'+((!canBook&&!IS_ADMIN)?' disabled':'')+'>'+label+'</option>';
+  });
   document.getElementById('bk-from').value=todayStr(); document.getElementById('bk-to').value=todayStr();
 }
 
@@ -686,6 +695,9 @@ function addBooking() {
   var from=document.getElementById('bk-from').value,to=document.getElementById('bk-to').value;
   var job=document.getElementById('bk-job').value.trim();
   if(!itemId||!emp||!from||!to){alert('Please fill in all booking fields.');return;}
+  // Check if selected employee has booking permission
+  var empObj=db.employees.filter(function(e){return e.name===emp;})[0];
+  if(empObj && empObj.canBook===false && !IS_ADMIN){alert('No booking permission. Contact your admin.');return;}
   if(from>to){alert('End date must be on or after start date.');return;}
   var item=db.items.filter(function(i){return i.id===itemId;})[0];
   if(item.status==='out'){
@@ -753,6 +765,7 @@ function renderItems() {
       +'<div class="row" style="gap:6px;margin-left:8px">'
       +'<button class="btn sm" data-idx="'+i+'" onclick="showQR(this.dataset.idx)">QR</button>'
       +'<button class="btn sm" data-idx="'+i+'" onclick="showItemLog(this.dataset.idx)" style="font-size:11px">Log</button>'
+      +(IS_ADMIN?'<button class="btn sm" data-idx="'+i+'" onclick="editItem(this.dataset.idx)">Edit</button>':'')
       +(IS_ADMIN?'<button class="btn danger sm" data-idx="'+i+'" onclick="delItem(this.dataset.idx)">✕</button>':'')
       +'</div></div></div>';
   }
@@ -779,9 +792,11 @@ function addEmp() {
   if(!IS_ADMIN){alert('Admin access required.');return;}
   var name=document.getElementById('new-emp').value.trim(); if(!name) return;
   for(var i=0;i<db.employees.length;i++){if(db.employees[i].name.toLowerCase()===name.toLowerCase()){alert('Already exists.');return;}}
-  db.employees.push({name:name}); 
+  var canBook = document.getElementById('new-emp-can-book').checked;
+  db.employees.push({name:name, canBook:canBook}); 
   db.employees.sort(function(a,b){return a.name.localeCompare(b.name);});
   document.getElementById('new-emp').value='';
+  document.getElementById('new-emp-can-book').checked = true;
   saveCloud(); renderEmps(); renderScanEmps(); renderBkForm(); toast('Added ✓');
 }
 
@@ -789,7 +804,20 @@ function renderEmps() {
   var el=document.getElementById('emp-list'); if(!el) return;
   if(!db.employees.length){el.innerHTML='<div class="empty">No employees yet.'+(IS_ADMIN?' Add one above.':'')+'</div>';return;}
   el.innerHTML=db.employees.map(function(e,i){
-    return'<div class="card" style="margin-bottom:8px"><div class="row-between"><div style="font-size:14px;font-weight:700">👤 '+esc(e.name)+'</div>'+(IS_ADMIN?'<button class="btn danger sm" data-idx="'+i+'" onclick="delEmp(this.dataset.idx)">✕</button>':'')+'</div></div>';
+    var bookBadge = IS_ADMIN
+      ? (e.canBook !== false
+          ? '<span class="badge in" style="margin-left:8px;font-size:10px">📅 Can book</span>'
+          : '<span class="badge out" style="margin-left:8px;font-size:10px">🚫 No booking</span>')
+      : '';
+    return '<div class="card" style="margin-bottom:8px"><div class="row-between">'
+      +'<div><div style="font-size:14px;font-weight:700">👤 '+esc(e.name)+bookBadge+'</div></div>'
+      +(IS_ADMIN
+        ? '<div class="row" style="gap:6px">'
+          +'<button class="btn sm" data-idx="'+i+'" onclick="editEmp(this.dataset.idx)">Edit</button>'
+          +'<button class="btn danger sm" data-idx="'+i+'" onclick="delEmp(this.dataset.idx)">✕</button>'
+          +'</div>'
+        : '')
+      +'</div></div>';
   }).join('');
 }
 
@@ -968,6 +996,74 @@ function cancelCSVImport() {
   document.getElementById('csv-file-input').value = '';
 }
 
+// ─── Edit Employee ─────────────────────────────────────────────────────────
+function editEmp(idx) {
+  var emp = db.employees[parseInt(idx)]; if (!emp) return;
+  document.getElementById('edit-emp-idx').value = idx;
+  document.getElementById('edit-emp-name').value = emp.name;
+  document.getElementById('edit-emp-can-book').checked = emp.canBook !== false;
+  document.getElementById('modal-edit-emp').classList.add('open');
+}
+
+function saveEmpEdit() {
+  var idx = parseInt(document.getElementById('edit-emp-idx').value);
+  var emp = db.employees[idx]; if (!emp) return;
+  var newName = document.getElementById('edit-emp-name').value.trim();
+  var canBook = document.getElementById('edit-emp-can-book').checked;
+  if (!newName) { alert('Name cannot be empty.'); return; }
+  var oldName = emp.name;
+  emp.name = newName;
+  emp.canBook = canBook;
+  // Update references in items and log
+  db.items.forEach(function(i) { if (i.employee === oldName) i.employee = newName; });
+  db.log.forEach(function(l) { if (l.employee === oldName) l.employee = newName; if (l.fromEmployee === oldName) l.fromEmployee = newName; });
+  db.bookings.forEach(function(b) { if (b.employee === oldName) b.employee = newName; });
+  db.employees.sort(function(a,b){return a.name.localeCompare(b.name);});
+  saveCloud(); renderEmps(); renderScanEmps(); renderBkForm(); closeModal('modal-edit-emp'); toast('Employee updated ✓');
+}
+
+// ─── Edit Item ──────────────────────────────────────────────────────────────
+function editItem(idx) {
+  var item = db.items[parseInt(idx)]; if (!item) return;
+  document.getElementById('edit-item-idx').value = idx;
+  document.getElementById('edit-item-name').value = item.name;
+  document.getElementById('edit-item-id').value = item.id;
+  // Set colour picker
+  var col = item.colour || '#f59e0b';
+  document.querySelectorAll('.edit-colour-btn').forEach(function(b) {
+    b.style.border = b.dataset.colour === col ? '3px solid #1a1a1a' : '2px solid transparent';
+  });
+  document.getElementById('modal-edit-item').classList.add('open');
+}
+
+function selectEditColour(btn) {
+  document.querySelectorAll('.edit-colour-btn').forEach(function(b) { b.style.border='2px solid transparent'; });
+  btn.style.border = '3px solid #1a1a1a';
+}
+
+function getEditColour() {
+  var active = document.querySelector('.edit-colour-btn[style*="3px solid"]');
+  return active ? active.dataset.colour : '#f59e0b';
+}
+
+function saveItemEdit() {
+  var idx = parseInt(document.getElementById('edit-item-idx').value);
+  var item = db.items[idx]; if (!item) return;
+  var newName = document.getElementById('edit-item-name').value.trim();
+  var newId = document.getElementById('edit-item-id').value.trim();
+  var newColour = getEditColour();
+  if (!newName || !newId) { alert('Name and ID cannot be empty.'); return; }
+  // Check ID doesn't clash with another item
+  var clash = db.items.some(function(i, i2) { return i.id === newId && i2 !== idx; });
+  if (clash) { alert('That Item ID is already used by another item.'); return; }
+  var oldId = item.id, oldName = item.name;
+  item.name = newName; item.id = newId; item.colour = newColour;
+  // Update references
+  db.bookings.forEach(function(b) { if (b.itemId === oldId) { b.itemId = newId; b.itemName = newName; } });
+  db.log.forEach(function(l) { if (l.itemId === oldId) { l.itemId = newId; l.itemName = newName; } });
+  saveCloud(); renderItems(); renderBkForm(); renderCal(); closeModal('modal-edit-item'); toast('Item updated ✓');
+}
+
 function closeModal(id) { document.getElementById(id).classList.remove('open'); if(id==='modal-confirm') pendingAction=null; }
 
 function showItemLog(idx) {
@@ -993,6 +1089,54 @@ document.getElementById('manual-code').addEventListener('keydown',function(e){if
 // ─── Boot ──────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', function() { loadCloud(); });
 </script>
+<!-- EDIT EMPLOYEE MODAL -->
+<div class="modal-bg" id="modal-edit-emp">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>Edit Employee</h3>
+    <input type="hidden" id="edit-emp-idx">
+    <div class="field"><label>Full name</label><input type="text" id="edit-emp-name" placeholder="Full name"></div>
+    <div class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <input type="checkbox" id="edit-emp-can-book" style="width:auto;padding:0;margin:0">
+      <label style="margin:0;font-size:13px;color:#1a1a1a;cursor:pointer" for="edit-emp-can-book">Can create &amp; edit bookings</label>
+    </div>
+    <div class="row">
+      <button class="btn" style="flex:1" onclick="closeModal('modal-edit-emp')">Cancel</button>
+      <button class="btn primary" style="flex:1" onclick="saveEmpEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT ITEM MODAL -->
+<div class="modal-bg" id="modal-edit-item">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>Edit Item</h3>
+    <input type="hidden" id="edit-item-idx">
+    <div class="field"><label>Item name</label><input type="text" id="edit-item-name" placeholder="Item name"></div>
+    <div class="field"><label>Item ID</label><input type="text" id="edit-item-id" placeholder="Item ID"></div>
+    <div class="field">
+      <label>Colour</label>
+      <div class="row" style="flex-wrap:wrap;gap:8px" id="edit-colour-picker">
+        <button type="button" class="edit-colour-btn" data-colour="#f59e0b" onclick="selectEditColour(this)" style="background:#f59e0b;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+        <button type="button" class="edit-colour-btn" data-colour="#ef4444" onclick="selectEditColour(this)" style="background:#ef4444;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+        <button type="button" class="edit-colour-btn" data-colour="#3b82f6" onclick="selectEditColour(this)" style="background:#3b82f6;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+        <button type="button" class="edit-colour-btn" data-colour="#22c55e" onclick="selectEditColour(this)" style="background:#22c55e;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+        <button type="button" class="edit-colour-btn" data-colour="#a855f7" onclick="selectEditColour(this)" style="background:#a855f7;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+        <button type="button" class="edit-colour-btn" data-colour="#ec4899" onclick="selectEditColour(this)" style="background:#ec4899;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+        <button type="button" class="edit-colour-btn" data-colour="#14b8a6" onclick="selectEditColour(this)" style="background:#14b8a6;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+        <button type="button" class="edit-colour-btn" data-colour="#f97316" onclick="selectEditColour(this)" style="background:#f97316;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+        <button type="button" class="edit-colour-btn" data-colour="#6366f1" onclick="selectEditColour(this)" style="background:#6366f1;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+        <button type="button" class="edit-colour-btn" data-colour="#1a1a1a" onclick="selectEditColour(this)" style="background:#1a1a1a;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
+      </div>
+    </div>
+    <div class="row">
+      <button class="btn" style="flex:1" onclick="closeModal('modal-edit-item')">Cancel</button>
+      <button class="btn primary" style="flex:1" onclick="saveItemEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- ITEM LOG MODAL -->
 <div class="modal-bg" id="modal-item-log">
   <div class="modal">
