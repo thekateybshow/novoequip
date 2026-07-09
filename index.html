@@ -246,9 +246,19 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
     <h2>Staff</h2>
     <div class="card" style="margin-bottom:10px" id="add-emp-card">
       <div class="field"><label>Full name</label><input type="text" id="new-emp" placeholder="Full name"></div>
-      <div class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-        <input type="checkbox" id="new-emp-can-book" style="width:auto;padding:0;margin:0" checked>
-        <label style="margin:0;font-size:13px;color:#1a1a1a;cursor:pointer" for="new-emp-can-book">Can create &amp; edit bookings</label>
+      <div class="field" style="margin-bottom:10px">
+        <label>Booking access</label>
+        <div style="display:flex;gap:8px">
+          <button type="button" id="role-staff-btn" onclick="setRoleBtn(false)"
+            style="flex:1;padding:10px 8px;border-radius:8px;border:2px solid #1a1a1a;background:#1a1a1a;color:#fff;font-family:Arial,sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-align:center">
+            👷 Staff only<br><span style="font-size:10px;font-weight:400;opacity:.8">Scan in/out only</span>
+          </button>
+          <button type="button" id="role-manager-btn" onclick="setRoleBtn(true)"
+            style="flex:1;padding:10px 8px;border-radius:8px;border:2px solid #ddd;background:#fff;color:#888;font-family:Arial,sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-align:center">
+            📋 Manager<br><span style="font-size:10px;font-weight:400">Can create bookings</span>
+          </button>
+        </div>
+        <input type="hidden" id="new-emp-can-book" value="false">
       </div>
       <button class="btn primary full" onclick="addEmp()">Add employee</button>
     </div>
@@ -684,8 +694,10 @@ function renderBkForm() {
   be.innerHTML='<option value="">Select...</option>';
   db.employees.forEach(function(e){
     var canBook = e.canBook !== false;
-    var label = esc(e.name) + (IS_ADMIN && !canBook ? ' 🚫' : '');
-    be.innerHTML+='<option value="'+esc(e.name)+'"'+((!canBook&&!IS_ADMIN)?' disabled':'')+'>'+label+'</option>';
+    // Only show employees with booking permission (admin sees all)
+    if (!canBook && !IS_ADMIN) return;
+    var label = esc(e.name) + (IS_ADMIN && !canBook ? ' (no booking access)' : '');
+    be.innerHTML+='<option value="'+esc(e.name)+'">'+label+'</option>';
   });
   document.getElementById('bk-from').value=todayStr(); document.getElementById('bk-to').value=todayStr();
 }
@@ -792,11 +804,11 @@ function addEmp() {
   if(!IS_ADMIN){alert('Admin access required.');return;}
   var name=document.getElementById('new-emp').value.trim(); if(!name) return;
   for(var i=0;i<db.employees.length;i++){if(db.employees[i].name.toLowerCase()===name.toLowerCase()){alert('Already exists.');return;}}
-  var canBook = document.getElementById('new-emp-can-book').checked;
+  var canBook = document.getElementById('new-emp-can-book').value === 'true';
   db.employees.push({name:name, canBook:canBook}); 
   db.employees.sort(function(a,b){return a.name.localeCompare(b.name);});
   document.getElementById('new-emp').value='';
-  document.getElementById('new-emp-can-book').checked = true;
+  setRoleBtn(false);
   saveCloud(); renderEmps(); renderScanEmps(); renderBkForm(); toast('Added ✓');
 }
 
@@ -996,12 +1008,39 @@ function cancelCSVImport() {
   document.getElementById('csv-file-input').value = '';
 }
 
+// ─── Role toggle helpers ───────────────────────────────────────────────────
+function setRoleBtn(isManager) {
+  document.getElementById('new-emp-can-book').value = isManager ? 'true' : 'false';
+  var sb = document.getElementById('role-staff-btn');
+  var mb = document.getElementById('role-manager-btn');
+  if (!isManager) {
+    sb.style.background='#1a1a1a'; sb.style.color='#fff'; sb.style.borderColor='#1a1a1a';
+    mb.style.background='#fff'; mb.style.color='#888'; mb.style.borderColor='#ddd';
+  } else {
+    mb.style.background='#1a1a1a'; mb.style.color='#fff'; mb.style.borderColor='#1a1a1a';
+    sb.style.background='#fff'; sb.style.color='#888'; sb.style.borderColor='#ddd';
+  }
+}
+
+function setEditRoleBtn(isManager) {
+  document.getElementById('edit-emp-can-book').value = isManager ? 'true' : 'false';
+  var sb = document.getElementById('edit-role-staff-btn');
+  var mb = document.getElementById('edit-role-manager-btn');
+  if (!isManager) {
+    sb.style.background='#1a1a1a'; sb.style.color='#fff'; sb.style.borderColor='#1a1a1a';
+    mb.style.background='#fff'; mb.style.color='#888'; mb.style.borderColor='#ddd';
+  } else {
+    mb.style.background='#1a1a1a'; mb.style.color='#fff'; mb.style.borderColor='#1a1a1a';
+    sb.style.background='#fff'; sb.style.color='#888'; sb.style.borderColor='#ddd';
+  }
+}
+
 // ─── Edit Employee ─────────────────────────────────────────────────────────
 function editEmp(idx) {
   var emp = db.employees[parseInt(idx)]; if (!emp) return;
   document.getElementById('edit-emp-idx').value = idx;
   document.getElementById('edit-emp-name').value = emp.name;
-  document.getElementById('edit-emp-can-book').checked = emp.canBook !== false;
+  setEditRoleBtn(emp.canBook !== false);
   document.getElementById('modal-edit-emp').classList.add('open');
 }
 
@@ -1009,7 +1048,7 @@ function saveEmpEdit() {
   var idx = parseInt(document.getElementById('edit-emp-idx').value);
   var emp = db.employees[idx]; if (!emp) return;
   var newName = document.getElementById('edit-emp-name').value.trim();
-  var canBook = document.getElementById('edit-emp-can-book').checked;
+  var canBook = document.getElementById('edit-emp-can-book').value === 'true';
   if (!newName) { alert('Name cannot be empty.'); return; }
   var oldName = emp.name;
   emp.name = newName;
@@ -1096,9 +1135,19 @@ window.addEventListener('DOMContentLoaded', function() { loadCloud(); });
     <h3>Edit Employee</h3>
     <input type="hidden" id="edit-emp-idx">
     <div class="field"><label>Full name</label><input type="text" id="edit-emp-name" placeholder="Full name"></div>
-    <div class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-      <input type="checkbox" id="edit-emp-can-book" style="width:auto;padding:0;margin:0">
-      <label style="margin:0;font-size:13px;color:#1a1a1a;cursor:pointer" for="edit-emp-can-book">Can create &amp; edit bookings</label>
+    <div class="field" style="margin-bottom:14px">
+      <label>Booking access</label>
+      <div style="display:flex;gap:8px">
+        <button type="button" id="edit-role-staff-btn" onclick="setEditRoleBtn(false)"
+          style="flex:1;padding:10px 8px;border-radius:8px;border:2px solid #ddd;background:#fff;color:#888;font-family:Arial,sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-align:center">
+          👷 Staff only<br><span style="font-size:10px;font-weight:400">Scan in/out only</span>
+        </button>
+        <button type="button" id="edit-role-manager-btn" onclick="setEditRoleBtn(true)"
+          style="flex:1;padding:10px 8px;border-radius:8px;border:2px solid #ddd;background:#fff;color:#888;font-family:Arial,sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-align:center">
+          📋 Manager<br><span style="font-size:10px;font-weight:400">Can create bookings</span>
+        </button>
+      </div>
+      <input type="hidden" id="edit-emp-can-book" value="false">
     </div>
     <div class="row">
       <button class="btn" style="flex:1" onclick="closeModal('modal-edit-emp')">Cancel</button>
