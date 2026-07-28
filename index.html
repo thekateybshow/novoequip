@@ -192,10 +192,35 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
   <div class="panel" id="panel-items">
     <h2>Items</h2>
     <div class="card" style="margin-bottom:10px" id="add-item-card">
+      <div class="field">
+        <label>Item type</label>
+        <div style="display:flex;gap:8px">
+          <button type="button" id="type-single-btn" onclick="setItemType('single')"
+            style="flex:1;padding:10px 8px;border-radius:8px;border:2px solid #1a1a1a;background:#1a1a1a;color:#fff;font-family:Arial,sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-align:center">
+            🔧 Single item<br><span style="font-size:10px;font-weight:400;opacity:.8">Has asset number</span>
+          </button>
+          <button type="button" id="type-bulk-btn" onclick="setItemType('bulk')"
+            style="flex:1;padding:10px 8px;border-radius:8px;border:2px solid #ddd;background:#fff;color:#888;font-family:Arial,sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-align:center">
+            📦 Bulk item<br><span style="font-size:10px;font-weight:400">e.g. Bollards, Flags</span>
+          </button>
+        </div>
+        <input type="hidden" id="new-item-type" value="single">
+      </div>
       <div class="field"><label>Item name</label><input type="text" id="new-item-name" placeholder="e.g. Drill, Ladder, Harness"></div>
       <div class="field">
+        <label>Category</label>
+        <div class="row">
+          <select id="new-item-cat"><option value="">No category</option></select>
+          <button class="btn sm" onclick="addCategoryPrompt()">+ New</button>
+        </div>
+      </div>
+      <div class="field" id="item-id-field">
         <label>Item ID</label>
         <div class="row"><input type="text" id="new-item-id" placeholder="e.g. TOOL-001"><button class="btn sm" onclick="autoId()">Auto</button></div>
+      </div>
+      <div class="field" id="item-qty-field" style="display:none">
+        <label>Total quantity in stock</label>
+        <input type="number" id="new-item-qty" placeholder="e.g. 20" min="1" value="1">
       </div>
       <div class="field">
         <label>Colour (for calendar)</label>
@@ -275,6 +300,17 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
         <button class="btn danger sm" id="clear-log-btn" onclick="clearLog()" style="display:none">Clear</button>
       </div>
     </div>
+    <!-- Employee equipment view -->
+    <div class="card" style="margin-bottom:12px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px">👤 What does an employee have?</div>
+      <div class="row">
+        <select id="emp-filter-select" onchange="renderEmpEquipment()">
+          <option value="">Select employee...</option>
+        </select>
+      </div>
+      <div id="emp-equipment-list" style="margin-top:10px"></div>
+    </div>
+    <div class="divider"></div>
     <div id="log-list"></div>
   </div>
 </div>
@@ -540,9 +576,13 @@ function processCode(code) {
   var re = document.getElementById('scan-result');
   if (!item) { re.style.display = 'block'; re.innerHTML = '<div class="card" style="border-color:#e0b0b0"><div style="color:#c0392b;font-weight:700">⚠ Item not found</div><div class="isub">No item with ID: <strong>' + esc(code) + '</strong></div></div>'; return; }
   var emp = document.getElementById('scan-emp').value;
+  if (item.type === 'bulk') {
+    showBulkModal(item, emp);
+    return;
+  }
   if (item.status === 'in') {
     if (!emp) { alert('Please select an employee first.'); return; }
-    pendingAction = { type: 'out', item: item, emp: emp, job: '—' };
+    pendingAction = { type: 'out', item: item, emp: emp, job: '---' };
     document.getElementById('conf-title').textContent = 'Check out item';
     document.getElementById('conf-body').innerHTML = 'Check out <strong>' + esc(item.name) + '</strong> to <strong>' + esc(emp) + '</strong>?';
     document.getElementById('conf-btn').textContent = 'Check out';
@@ -749,38 +789,130 @@ function getSelectedColour() {
   return active ? active.dataset.colour : '#f59e0b';
 }
 
+function setItemType(type) {
+  document.getElementById('new-item-type').value = type;
+  var sb = document.getElementById('type-single-btn'), bb = document.getElementById('type-bulk-btn');
+  var idField = document.getElementById('item-id-field'), qtyField = document.getElementById('item-qty-field');
+  if (type === 'single') {
+    sb.style.background='#1a1a1a'; sb.style.color='#fff'; sb.style.borderColor='#1a1a1a';
+    bb.style.background='#fff'; bb.style.color='#888'; bb.style.borderColor='#ddd';
+    idField.style.display='block'; qtyField.style.display='none';
+  } else {
+    bb.style.background='#1a1a1a'; bb.style.color='#fff'; bb.style.borderColor='#1a1a1a';
+    sb.style.background='#fff'; sb.style.color='#888'; sb.style.borderColor='#ddd';
+    idField.style.display='none'; qtyField.style.display='block';
+  }
+}
+
 function addItem() {
   if(!IS_ADMIN){alert('Admin access required.');return;}
-  var name=document.getElementById('new-item-name').value.trim(),id=document.getElementById('new-item-id').value.trim();
-  if(!name||!id){alert('Enter item name and ID.');return;}
-  for(var i=0;i<db.items.length;i++){if(db.items[i].id===id){alert('That Item ID already exists.');return;}}
-  var colour = getSelectedColour();
-  db.items.push({id:id,name:name,colour:colour,status:'in',employee:null,job:null,since:null});
-  document.getElementById('new-item-name').value=''; document.getElementById('new-item-id').value='';
+  var name=document.getElementById('new-item-name').value.trim();
+  var type=document.getElementById('new-item-type').value;
+  var colour=getSelectedColour();
+  if(!name){alert('Enter item name.');return;}
+  if(type==='bulk') {
+    var qty=parseInt(document.getElementById('new-item-qty').value)||1;
+    var id='BULK-'+name.replace(/[^a-zA-Z0-9]/g,'-').toUpperCase()+'-'+Date.now().toString().slice(-4);
+    var cat=document.getElementById('new-item-cat').value;
+    db.items.push({id:id,name:name,colour:colour,category:cat,type:'bulk',totalQty:qty,allocations:[],status:'in',employee:null,job:null,since:null});
+    document.getElementById('new-item-name').value='';
+    document.getElementById('new-item-qty').value='1';
+    setItemType('single');
+  } else {
+    var id=document.getElementById('new-item-id').value.trim();
+    if(!id){alert('Enter item ID.');return;}
+    for(var i=0;i<db.items.length;i++){if(db.items[i].id===id){alert('That Item ID already exists.');return;}}
+    var cat=document.getElementById('new-item-cat').value;
+    db.items.push({id:id,name:name,colour:colour,category:cat,type:'single',status:'in',employee:null,job:null,since:null});
+    document.getElementById('new-item-name').value='';
+    document.getElementById('new-item-id').value='';
+    setItemType('single');
+  }
   saveCloud(); renderItems(); renderBkForm(); updateHdr(); toast('Item added ✓');
+}
+
+function getCats() {
+  var cats = [];
+  db.items.forEach(function(i) { var c=i.category||''; if(c&&cats.indexOf(c)===-1) cats.push(c); });
+  return cats.sort();
+}
+
+function addCategoryPrompt() {
+  var name = prompt('New category name:');
+  if (!name || !name.trim()) return;
+  name = name.trim();
+  if (!db.categories) db.categories = [];
+  if (db.categories.indexOf(name) === -1) { db.categories.push(name); db.categories.sort(); saveCloud(); }
+  renderCatDropdown('new-item-cat', name);
+  renderCatDropdown('edit-item-cat', name);
+}
+
+function renderCatDropdown(id, selected) {
+  var sel = document.getElementById(id); if (!sel) return;
+  var cats = db.categories || [];
+  // Also include any categories already used by items
+  db.items.forEach(function(i) { if (i.category && cats.indexOf(i.category)===-1) cats.push(i.category); });
+  cats.sort();
+  var cur = selected || sel.value;
+  sel.innerHTML = '<option value="">No category</option>';
+  cats.forEach(function(c) { sel.innerHTML += '<option value="'+esc(c)+'"'+(c===cur?' selected':'')+'>'+esc(c)+'</option>'; });
 }
 
 function renderItems() {
   var el=document.getElementById('items-list'); if(!el) return;
+  // Refresh category dropdowns
+  renderCatDropdown('new-item-cat');
+  renderCatDropdown('edit-item-cat');
   if(!db.items.length){el.innerHTML='<div class="empty">No items yet.'+(IS_ADMIN?' Add one above.':'')+'</div>';return;}
   var t=todayStr(),html='';
-  for(var i=0;i<db.items.length;i++){
+  // Group by category
+  var cats = [];
+  db.items.forEach(function(item) { var c=item.category||''; if(cats.indexOf(c)===-1) cats.push(c); });
+  // Sort: named categories first (alphabetical), uncategorised last
+  cats.sort(function(a,b) { if(!a&&b) return 1; if(a&&!b) return -1; return a.localeCompare(b); });
+  cats.forEach(function(cat) {
+    var catItems = db.items.map(function(item,i){return{item:item,i:i};}).filter(function(x){return (x.item.category||'')=== cat;});
+    if (cat) html += '<div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;padding:0 2px">'+esc(cat)+'</div>';
+    for(var ci=0;ci<catItems.length;ci++){
+      var item=catItems[ci].item, i=catItems[ci].i;
     var item=db.items[i],nb=null;
     for(var j=0;j<db.bookings.length;j++){if(db.bookings[j].itemId===item.id&&db.bookings[j].status==='active'&&db.bookings[j].from>=t){nb=db.bookings[j];break;}}
     var bb=nb?'<span class="badge booked" style="margin-left:4px">Booked '+nb.from+'</span>':'';
-    html+='<div class="card" style="margin-bottom:8px"><div class="row-between">'
-      +'<div style="flex:1;min-width:0"><div class="row" style="gap:6px;flex-wrap:wrap">'
-      +'<span class="sdot '+(item.status==='in'?'in':'out')+'" style="background:'+(item.colour||'#27ae60')+'"></span>'
-      +'<span class="iname">'+esc(item.name)+'</span>'
-      +'<span class="badge '+(item.status==='in'?'in':'out')+'">'+(item.status==='in'?'Available':'Out')+'</span>'+bb
-      +'</div><div class="isub">ID: '+esc(item.id)+(item.status==='out'?' · '+esc(item.employee):'')+' </div></div>'
-      +'<div class="row" style="gap:6px;margin-left:8px">'
-      +'<button class="btn sm" data-idx="'+i+'" onclick="showQR(this.dataset.idx)">QR</button>'
-      +'<button class="btn sm" data-idx="'+i+'" onclick="showItemLog(this.dataset.idx)" style="font-size:11px">Log</button>'
-      +(IS_ADMIN?'<button class="btn sm" data-idx="'+i+'" onclick="editItem(this.dataset.idx)">Edit</button>':'')
-      +(IS_ADMIN?'<button class="btn danger sm" data-idx="'+i+'" onclick="delItem(this.dataset.idx)">✕</button>':'')
-      +'</div></div></div>';
-  }
+    if(item.type==='bulk'){
+      var allocs=item.allocations||[];
+      var totalOut=allocs.reduce(function(s,a){return s+a.qty;},0);
+      var avail=(item.totalQty||0)-totalOut;
+      var bulkStatus=avail>0?'<span class="badge in">'+avail+' available</span>':'<span class="badge out">All out</span>';
+      var allocList=allocs.length?allocs.map(function(a){return '<span style="font-size:11px;color:#666">'+esc(a.employee)+': '+a.qty+'</span>';}).join(' · '):'';
+      html+='<div class="card" style="margin-bottom:8px"><div class="row-between">'
+        +'<div style="flex:1;min-width:0"><div class="row" style="gap:6px;flex-wrap:wrap">'
+        +'<span style="font-size:16px">📦</span>'
+        +'<span class="iname">'+esc(item.name)+'</span>'
+        +bulkStatus+bb
+        +'</div>'
+        +'<div class="isub">Total: '+(item.totalQty||0)+' · Out: '+totalOut+(allocList?' · '+allocList:'')+'</div></div>'
+        +'<div class="row" style="gap:6px;margin-left:8px">'
+        +'<button class="btn sm" data-idx="'+i+'" onclick="showQR(this.dataset.idx)">QR</button>'
+        +'<button class="btn sm" data-idx="'+i+'" onclick="showItemLog(this.dataset.idx)">Log</button>'
+        +(IS_ADMIN?'<button class="btn sm" data-idx="'+i+'" onclick="editItem(this.dataset.idx)">Edit</button>':'')
+        +(IS_ADMIN?'<button class="btn danger sm" data-idx="'+i+'" onclick="delItem(this.dataset.idx)">✕</button>':'')
+        +'</div></div></div>';
+    } else {
+      html+='<div class="card" style="margin-bottom:8px"><div class="row-between">'
+        +'<div style="flex:1;min-width:0"><div class="row" style="gap:6px;flex-wrap:wrap">'
+        +'<span class="sdot '+(item.status==='in'?'in':'out')+'" style="background:'+(item.colour||'#27ae60')+'"></span>'
+        +'<span class="iname">'+esc(item.name)+'</span>'
+        +'<span class="badge '+(item.status==='in'?'in':'out')+'">'+(item.status==='in'?'Available':'Out')+'</span>'+bb
+        +'</div><div class="isub">ID: '+esc(item.id)+(item.status==='out'?' · '+esc(item.employee):'')+' </div></div>'
+        +'<div class="row" style="gap:6px;margin-left:8px">'
+        +'<button class="btn sm" data-idx="'+i+'" onclick="showQR(this.dataset.idx)">QR</button>'
+        +'<button class="btn sm" data-idx="'+i+'" onclick="showItemLog(this.dataset.idx)">Log</button>'
+        +(IS_ADMIN?'<button class="btn sm" data-idx="'+i+'" onclick="editItem(this.dataset.idx)">Edit</button>':'')
+        +(IS_ADMIN?'<button class="btn danger sm" data-idx="'+i+'" onclick="delItem(this.dataset.idx)">✕</button>':'')
+        +'</div></div></div>';
+    }
+    }
+  });
   el.innerHTML=html;
 }
 
@@ -850,12 +982,52 @@ function delEmp(idx) {
 }
 
 // ─── Log ───────────────────────────────────────────────────────────────────
+function renderEmpEquipment() {
+  var empName = document.getElementById('emp-filter-select').value;
+  var el = document.getElementById('emp-equipment-list');
+  if (!empName) { el.innerHTML = ''; return; }
+  var items = db.items.filter(function(i) { return i.status==='out' && i.employee===empName; });
+  var bulkItems = db.items.filter(function(i) {
+    return i.type==='bulk' && i.allocations && i.allocations.some(function(a){return a.employee===empName;});
+  });
+  if (!items.length && !bulkItems.length) {
+    el.innerHTML = '<div style="font-size:13px;color:#aaa;padding:6px 0">No equipment currently with '+esc(empName)+'.</div>';
+    return;
+  }
+  var html = '';
+  items.forEach(function(item) {
+    html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0">'
+      +'<span class="sdot out" style="background:'+(item.colour||'#c0392b')+'"></span>'
+      +'<div><div style="font-size:13px;font-weight:700">'+esc(item.name)+'</div>'
+      +'<div style="font-size:11px;color:#aaa">ID: '+esc(item.id)+' · Since: '+esc(item.since||'—')+'</div></div>'
+      +'</div>';
+  });
+  bulkItems.forEach(function(item) {
+    var alloc = item.allocations.filter(function(a){return a.employee===empName;})[0];
+    if (!alloc) return;
+    html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0">'
+      +'<span style="font-size:16px">📦</span>'
+      +'<div><div style="font-size:13px;font-weight:700">'+esc(item.name)+' × '+alloc.qty+'</div>'
+      +'<div style="font-size:11px;color:#aaa">Bulk item</div></div>'
+      +'</div>';
+  });
+  el.innerHTML = html || '<div style="font-size:13px;color:#aaa;padding:6px 0">Nothing currently checked out.</div>';
+}
+
 function renderLog() {
   var el=document.getElementById('log-list'); if(!el) return;
+  // Populate employee filter dropdown
+  var empSel = document.getElementById('emp-filter-select');
+  if (empSel) {
+    var cur = empSel.value;
+    empSel.innerHTML = '<option value="">Select employee...</option>';
+    db.employees.forEach(function(e) { empSel.innerHTML += '<option value="'+esc(e.name)+'"'+(e.name===cur?' selected':'')+'>'+esc(e.name)+'</option>'; });
+    if (cur) renderEmpEquipment();
+  }
   if(!db.log.length){el.innerHTML='<div class="empty">No activity yet.</div>';return;}
   el.innerHTML=db.log.slice().reverse().map(function(e){
-    var badgeClass=e.action==='out'?'out':e.action==='transfer'?'transfer':'in';
-    var badgeLabel=e.action==='out'?'↑ Checked out':e.action==='transfer'?'⇄ Transferred':'↓ Returned';
+    var badgeClass=e.action==='out'?'out':e.action==='transfer'?'transfer':e.action==='bulk-out'?'out':e.action==='bulk-in'?'in':'in';
+    var badgeLabel=e.action==='out'?'↑ Checked out':e.action==='transfer'?'⇄ Transferred':e.action==='bulk-out'?'↑ Took out ('+e.qty+')':e.action==='bulk-in'?'↓ Returned ('+e.qty+')':'↓ Returned';
     var detail=e.action==='out'?esc(e.employee):e.action==='transfer'?esc(e.fromEmployee)+' → '+esc(e.employee):esc(e.employee);
     return'<div class="log-row"><div class="row-between"><div><span class="badge '+badgeClass+'" style="margin-right:8px">'+badgeLabel+'</span><strong>'+esc(e.itemName)+'</strong></div><div class="log-time">'+e.time+'</div></div><div style="font-size:12px;color:#888;margin-top:3px">'+detail+'</div></div>';
   }).join('');
@@ -1008,6 +1180,94 @@ function cancelCSVImport() {
   document.getElementById('csv-file-input').value = '';
 }
 
+// ─── Bulk Item ─────────────────────────────────────────────────────────────
+var _bulkItem = null;
+var _showingReturn = false;
+
+function showBulkModal(item, emp) {
+  _bulkItem = item; _showingReturn = false;
+  document.getElementById('bulk-title').textContent = item.name;
+  // Populate employee dropdowns
+  var sel1 = document.getElementById('bulk-emp');
+  var sel2 = document.getElementById('bulk-return-emp');
+  sel1.innerHTML = '<option value="">Select employee...</option>';
+  sel2.innerHTML = '<option value="">Select employee...</option>';
+  db.employees.forEach(function(e) {
+    sel1.innerHTML += '<option value="'+esc(e.name)+'"'+(e.name===emp?' selected':'')+'>'+esc(e.name)+'</option>';
+    sel2.innerHTML += '<option value="'+esc(e.name)+'">'+esc(e.name)+'</option>';
+  });
+  document.getElementById('bulk-qty-out').value = 1;
+  document.getElementById('bulk-qty-in').value = 1;
+  document.getElementById('bulk-take-section').style.display = 'block';
+  document.getElementById('bulk-return-section').style.display = 'none';
+  document.getElementById('bulk-toggle-btn').textContent = 'Show return section';
+  updateBulkInfo();
+  document.getElementById('modal-bulk').classList.add('open');
+}
+
+function updateBulkInfo() {
+  var item = _bulkItem; if (!item) return;
+  var allocs = item.allocations || [];
+  var totalOut = allocs.reduce(function(s,a){return s+a.qty;},0);
+  var avail = (item.totalQty||0) - totalOut;
+  var allocRows = allocs.length
+    ? allocs.map(function(a){return '<div style="display:flex;justify-content:space-between"><span>👤 '+esc(a.employee)+'</span><span style="font-weight:700">'+a.qty+' out</span></div>';}).join('')
+    : '<div style="color:#aaa">None currently out</div>';
+  document.getElementById('bulk-stock-info').innerHTML =
+    '<div style="display:flex;justify-content:space-between;margin-bottom:6px">'
+    +'<span>Total stock:</span><span style="font-weight:700">'+(item.totalQty||0)+'</span></div>'
+    +'<div style="display:flex;justify-content:space-between;margin-bottom:6px">'
+    +'<span>Currently out:</span><span style="font-weight:700;color:#c0392b">'+totalOut+'</span></div>'
+    +'<div style="display:flex;justify-content:space-between;margin-bottom:8px">'
+    +'<span>Available:</span><span style="font-weight:700;color:#27ae60">'+avail+'</span></div>'
+    +'<div style="border-top:1px solid #eee;padding-top:8px">'+allocRows+'</div>';
+}
+
+function toggleBulkSection() {
+  _showingReturn = !_showingReturn;
+  document.getElementById('bulk-take-section').style.display = _showingReturn ? 'none' : 'block';
+  document.getElementById('bulk-return-section').style.display = _showingReturn ? 'block' : 'none';
+  document.getElementById('bulk-toggle-btn').textContent = _showingReturn ? 'Show take out section' : 'Show return section';
+}
+
+function confirmBulkOut() {
+  var emp = document.getElementById('bulk-emp').value;
+  var qty = parseInt(document.getElementById('bulk-qty-out').value) || 0;
+  if (!emp) { alert('Select an employee.'); return; }
+  if (qty < 1) { alert('Enter a quantity of at least 1.'); return; }
+  var item = _bulkItem;
+  var allocs = item.allocations || [];
+  var totalOut = allocs.reduce(function(s,a){return s+a.qty;},0);
+  var avail = (item.totalQty||0) - totalOut;
+  if (qty > avail) { alert('Only ' + avail + ' available. Cannot take out ' + qty + '.'); return; }
+  // Add or update allocation for this employee
+  var existing = allocs.filter(function(a){return a.employee===emp;})[0];
+  if (existing) existing.qty += qty;
+  else allocs.push({employee:emp, qty:qty});
+  item.allocations = allocs;
+  var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  db.log.push({action:'bulk-out',itemId:item.id,itemName:item.name,employee:emp,qty:qty,time:now});
+  saveCloud(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' checked out to ' + emp + ' ✓');
+}
+
+function confirmBulkIn() {
+  var emp = document.getElementById('bulk-return-emp').value;
+  var qty = parseInt(document.getElementById('bulk-qty-in').value) || 0;
+  if (!emp) { alert('Select an employee.'); return; }
+  if (qty < 1) { alert('Enter a quantity of at least 1.'); return; }
+  var item = _bulkItem;
+  var allocs = item.allocations || [];
+  var existing = allocs.filter(function(a){return a.employee===emp;})[0];
+  if (!existing || existing.qty < qty) {
+    alert(emp + ' only has ' + (existing?existing.qty:0) + ' out. Cannot return ' + qty + '.'); return;
+  }
+  existing.qty -= qty;
+  if (existing.qty === 0) item.allocations = allocs.filter(function(a){return a.employee!==emp;});
+  var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  db.log.push({action:'bulk-in',itemId:item.id,itemName:item.name,employee:emp,qty:qty,time:now});
+  saveCloud(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' returned from ' + emp + ' ✓');
+}
+
 // ─── Role toggle helpers ───────────────────────────────────────────────────
 function setRoleBtn(isManager) {
   document.getElementById('new-emp-can-book').value = isManager ? 'true' : 'false';
@@ -1067,6 +1327,7 @@ function editItem(idx) {
   document.getElementById('edit-item-idx').value = idx;
   document.getElementById('edit-item-name').value = item.name;
   document.getElementById('edit-item-id').value = item.id;
+  renderCatDropdown('edit-item-cat', item.category||'');
   // Set colour picker
   var col = item.colour || '#f59e0b';
   document.querySelectorAll('.edit-colour-btn').forEach(function(b) {
@@ -1091,12 +1352,12 @@ function saveItemEdit() {
   var newName = document.getElementById('edit-item-name').value.trim();
   var newId = document.getElementById('edit-item-id').value.trim();
   var newColour = getEditColour();
+  var newCat = document.getElementById('edit-item-cat').value;
   if (!newName || !newId) { alert('Name and ID cannot be empty.'); return; }
-  // Check ID doesn't clash with another item
   var clash = db.items.some(function(i, i2) { return i.id === newId && i2 !== idx; });
   if (clash) { alert('That Item ID is already used by another item.'); return; }
   var oldId = item.id, oldName = item.name;
-  item.name = newName; item.id = newId; item.colour = newColour;
+  item.name = newName; item.id = newId; item.colour = newColour; item.category = newCat;
   // Update references
   db.bookings.forEach(function(b) { if (b.itemId === oldId) { b.itemId = newId; b.itemName = newName; } });
   db.log.forEach(function(l) { if (l.itemId === oldId) { l.itemId = newId; l.itemName = newName; } });
@@ -1165,6 +1426,13 @@ window.addEventListener('DOMContentLoaded', function() { loadCloud(); });
     <div class="field"><label>Item name</label><input type="text" id="edit-item-name" placeholder="Item name"></div>
     <div class="field"><label>Item ID</label><input type="text" id="edit-item-id" placeholder="Item ID"></div>
     <div class="field">
+      <label>Category</label>
+      <div class="row">
+        <select id="edit-item-cat"><option value="">No category</option></select>
+        <button class="btn sm" onclick="addCategoryPrompt()">+ New</button>
+      </div>
+    </div>
+    <div class="field">
       <label>Colour</label>
       <div class="row" style="flex-wrap:wrap;gap:8px" id="edit-colour-picker">
         <button type="button" class="edit-colour-btn" data-colour="#f59e0b" onclick="selectEditColour(this)" style="background:#f59e0b;width:32px;height:32px;border-radius:50%;border:2px solid transparent;cursor:pointer"></button>
@@ -1183,6 +1451,35 @@ window.addEventListener('DOMContentLoaded', function() { loadCloud(); });
       <button class="btn" style="flex:1" onclick="closeModal('modal-edit-item')">Cancel</button>
       <button class="btn primary" style="flex:1" onclick="saveItemEdit()">Save</button>
     </div>
+  </div>
+</div>
+
+<!-- BULK ITEM MODAL -->
+<div class="modal-bg" id="modal-bulk">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3 id="bulk-title">Bulk item</h3>
+    <div id="bulk-stock-info" style="background:#f8f8f8;border-radius:8px;padding:10px;margin-bottom:14px;font-size:13px;line-height:1.7"></div>
+    <div id="bulk-take-section">
+      <div class="field"><label>Employee taking items</label>
+        <select id="bulk-emp"><option value="">Select employee...</option></select>
+      </div>
+      <div class="field"><label>Quantity taking out</label>
+        <input type="number" id="bulk-qty-out" min="1" value="1" placeholder="How many?">
+      </div>
+      <button class="btn danger full" onclick="confirmBulkOut()" style="margin-bottom:8px">↑ Take out</button>
+    </div>
+    <div id="bulk-return-section" style="display:none">
+      <div class="field"><label>Who is returning items?</label>
+        <select id="bulk-return-emp"><option value="">Select employee...</option></select>
+      </div>
+      <div class="field"><label>Quantity returning</label>
+        <input type="number" id="bulk-qty-in" min="1" value="1" placeholder="How many?">
+      </div>
+      <button class="btn success full" onclick="confirmBulkIn()" style="margin-bottom:8px">↓ Return items</button>
+    </div>
+    <button class="btn full" id="bulk-toggle-btn" onclick="toggleBulkSection()" style="margin-bottom:8px;color:#666">Show return section</button>
+    <button class="btn full" onclick="closeModal('modal-bulk')" style="color:#aaa;border-color:#eee;font-size:12px">Cancel</button>
   </div>
 </div>
 
