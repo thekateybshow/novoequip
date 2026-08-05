@@ -153,6 +153,8 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
       <button class="btn primary sm" onclick="processCode(document.getElementById('manual-code').value.trim())">Go</button>
     </div>
     <div id="scan-result" style="display:none;margin-top:12px"></div>
+    <div class="divider"></div>
+    <button class="btn full" onclick="showNoQRModal()" style="color:#888;border-color:#ddd;font-size:13px">❓ No QR code — report to admin</button>
   </div>
 
   <!-- CALENDAR -->
@@ -582,13 +584,10 @@ function processCode(code) {
   var item = null; for (var i = 0; i < db.items.length; i++) { if (db.items[i].id === code) { item = db.items[i]; break; } }
   var re = document.getElementById('scan-result');
   if (!item) {
-    window._unknownCode = code;
     re.style.display = 'block';
     re.innerHTML = '<div class="card" style="border-color:#e0b0b0">'
-      +'<div style="color:#c0392b;font-weight:700;margin-bottom:8px">⚠ Item not in system</div>'
-      +'<div class="isub" style="margin-bottom:10px">Code: <strong>'+esc(code)+'</strong> — not found.</div>'
-      +'<div style="font-size:13px;color:#555;margin-bottom:8px">Is this a piece of equipment that needs to be added?</div>'
-      +'<button class="btn primary full" onclick="flagUnknownItem()" style="margin-bottom:6px">🚩 Flag for admin to add</button>'
+      +'<div style="color:#c0392b;font-weight:700">⚠ Item not found</div>'
+      +'<div class="isub">No item with ID: <strong>'+esc(code)+'</strong></div>'
       +'</div>';
     return;
   }
@@ -902,14 +901,15 @@ function renderItems() {
     var flags = (db.flags||[]).filter(function(f){return !f.resolved;});
     if (IS_ADMIN && flags.length) {
       var fh = '<div class="card" style="border-color:#f59e0b;margin-bottom:10px">'
-        +'<div style="font-size:13px;font-weight:700;color:#d4830a;margin-bottom:8px">🚩 '+flags.length+' item(s) flagged for review</div>';
+        +'<div style="font-size:13px;font-weight:700;color:#d4830a;margin-bottom:8px">🚩 '+flags.length+' item(s) need to be added</div>';
       flags.forEach(function(f, fi) {
-        fh += '<div style="padding:8px 0;border-bottom:1px solid #f0f0f0">'
-          +'<div style="font-size:13px;font-weight:700">'+esc(f.description)+'</div>'
-          +'<div style="font-size:11px;color:#888">Code: '+esc(f.code)+' · Reported by: '+esc(f.reportedBy)+' · '+esc(f.time)+'</div>'
-          +'<div class="row" style="gap:6px;margin-top:6px">'
+        fh += '<div style="padding:10px 0;border-bottom:1px solid #f0f0f0">'
+          +'<div style="font-size:14px;font-weight:700;margin-bottom:3px">'+esc(f.description)+'</div>'
+          +(f.notes?'<div style="font-size:12px;color:#555;margin-bottom:3px">📝 '+esc(f.notes)+'</div>':'')
+          +'<div style="font-size:11px;color:#aaa">Reported by: '+esc(f.reportedBy)+' · '+esc(f.time)+'</div>'
+          +'<div class="row" style="gap:6px;margin-top:8px">'
           +'<button class="btn sm primary" data-fi="'+fi+'" onclick="prefillFromFlag(this.dataset.fi)">+ Add to system</button>'
-          +'<button class="btn sm danger" data-fi="'+fi+'" onclick="dismissFlag(this.dataset.fi)">Dismiss</button>'
+          +'<button class="btn sm danger" data-fi="'+fi+'" onclick="dismissFlag(this.dataset.fi)">🗑 Delete</button>'
           +'</div></div>';
       });
       fh += '</div>';
@@ -1238,20 +1238,6 @@ function cancelCSVImport() {
   document.getElementById('csv-file-input').value = '';
 }
 
-// ─── Unknown Item Flag ─────────────────────────────────────────────────────
-function flagUnknownItem() {
-  var code = window._unknownCode || '';
-  var description = prompt('Describe this piece of equipment so admin can add it:');
-  if (!description || !description.trim()) return;
-  var emp = document.getElementById('scan-emp').value || 'Unknown';
-  var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
-  if (!db.flags) db.flags = [];
-  db.flags.push({ code: code, description: description.trim(), reportedBy: emp, time: now, resolved: false });
-  saveCloud();
-  document.getElementById('scan-result').innerHTML = '<div class="card" style="border-color:#b0d8b0"><div style="font-weight:700;color:#27ae60">✓ Flagged for admin</div><div class="isub">Admin will be notified to add this item.</div></div>';
-  toast('Flagged ✓');
-}
-
 // ─── Bulk Item ─────────────────────────────────────────────────────────────
 var _bulkItem = null;
 var _showingReturn = false;
@@ -1436,6 +1422,33 @@ function saveItemEdit() {
   saveCloud(); renderItems(); renderBkForm(); renderCal(); closeModal('modal-edit-item'); toast('Item updated ✓');
 }
 
+// ─── No QR Code Report ─────────────────────────────────────────────────────
+function showNoQRModal() {
+  var sel = document.getElementById('noqr-emp');
+  sel.innerHTML = '<option value="">Select your name...</option>';
+  db.employees.forEach(function(e) { sel.innerHTML += '<option value="'+esc(e.name)+'">'+esc(e.name)+'</option>'; });
+  // Pre-fill from scan employee if selected
+  var scanEmp = document.getElementById('scan-emp').value;
+  if (scanEmp) sel.value = scanEmp;
+  document.getElementById('noqr-name').value = '';
+  document.getElementById('noqr-notes').value = '';
+  document.getElementById('modal-no-qr').classList.add('open');
+}
+
+function submitNoQR() {
+  var name = document.getElementById('noqr-name').value.trim();
+  var emp = document.getElementById('noqr-emp').value;
+  var notes = document.getElementById('noqr-notes').value.trim();
+  if (!name) { alert('Please enter a description of the item.'); return; }
+  if (!emp) { alert('Please select your name.'); return; }
+  var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  if (!db.flags) db.flags = [];
+  db.flags.push({ id: Date.now().toString(), code: '', description: name, notes: notes, reportedBy: emp, time: now, resolved: false });
+  saveCloud();
+  closeModal('modal-no-qr');
+  toast('Sent to admin ✓');
+}
+
 function closeModal(id) { document.getElementById(id).classList.remove('open'); if(id==='modal-confirm') pendingAction=null; }
 
 function showItemLog(idx) {
@@ -1564,6 +1577,22 @@ window.addEventListener('DOMContentLoaded', function() { loadCloud(); });
       <button class="btn sm" onclick="closeModal('modal-item-log')">Close</button>
     </div>
     <div id="item-log-body"></div>
+  </div>
+</div>
+
+<!-- NO QR MODAL -->
+<div class="modal-bg" id="modal-no-qr">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>Report to admin</h3>
+    <p style="font-size:13px;color:#888;margin-bottom:14px">Fill in the details below and admin will add this item to the system.</p>
+    <div class="field"><label>Item name / description</label><input type="text" id="noqr-name" placeholder="e.g. Yellow extension lead"></div>
+    <div class="field"><label>Your name</label><select id="noqr-emp"><option value="">Select your name...</option></select></div>
+    <div class="field"><label>Any other details (optional)</label><input type="text" id="noqr-notes" placeholder="e.g. located in site shed, blue case"></div>
+    <div class="row">
+      <button class="btn" style="flex:1" onclick="closeModal('modal-no-qr')">Cancel</button>
+      <button class="btn primary" style="flex:1" onclick="submitNoQR()">Send to admin</button>
+    </div>
   </div>
 </div>
 
