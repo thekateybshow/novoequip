@@ -70,10 +70,10 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
 .cal-toggle{display:flex;gap:4px;margin-bottom:12px}
 .vtab{padding:7px 14px;border:1.5px solid #ddd;border-radius:8px;font-size:12px;font-weight:700;font-family:Arial,sans-serif;cursor:pointer;background:#fff;color:#888}
 .vtab.active{background:#1a1a1a;color:#fff;border-color:#1a1a1a}
-.cal-hdr{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:3px;margin-top:10px}
+.cal-hdr{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px;margin-bottom:3px;margin-top:10px}
 .cal-dn{text-align:center;font-size:11px;color:#bbb;font-weight:700;padding:4px 0}
-.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
-.cal-cell{border:1.5px solid #e8e8e8;border-radius:7px;min-height:56px;padding:3px;cursor:pointer;background:#fff}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
+.cal-cell{border:1.5px solid #e8e8e8;border-radius:7px;min-height:52px;padding:3px;cursor:pointer;background:#fff;overflow:hidden;word-break:break-word}
 .cal-cell.today{border-color:#1a1a1a}
 .cal-cell.dim{background:#f8f8f8;opacity:.5}
 .cal-cell.hasb{background:#fef3e0}
@@ -581,7 +581,8 @@ function stopScan() {
 function processCode(code) {
   var mc = document.getElementById('manual-code'); if (mc) mc.value = '';
   if (!code) return;
-  var item = null; for (var i = 0; i < db.items.length; i++) { if (db.items[i].id === code) { item = db.items[i]; break; } }
+  var code = code.trim();
+  var item = null; for (var i = 0; i < db.items.length; i++) { if (db.items[i].id.toLowerCase() === code.toLowerCase()) { item = db.items[i]; break; } }
   var re = document.getElementById('scan-result');
   if (!item) {
     re.style.display = 'block';
@@ -600,7 +601,29 @@ function processCode(code) {
     if (!emp) { alert('Please select an employee first.'); return; }
     pendingAction = { type: 'out', item: item, emp: emp, job: '---' };
     document.getElementById('conf-title').textContent = 'Check out item';
-    document.getElementById('conf-body').innerHTML = 'Check out <strong>' + esc(item.name) + '</strong> to <strong>' + esc(emp) + '</strong>?';
+    // Check if item has upcoming or current bookings
+    var today = todayStr();
+    var activeBooking = db.bookings.filter(function(b) {
+      return b.itemId === item.id && b.status === 'active' && b.from <= today && b.to >= today;
+    })[0];
+    var upcomingBooking = !activeBooking && db.bookings.filter(function(b) {
+      return b.itemId === item.id && b.status === 'active' && b.from > today;
+    }).sort(function(a,b){return a.from.localeCompare(b.from);})[0];
+    var bookingWarning = '';
+    if (activeBooking) {
+      bookingWarning = '<div style="background:#fde8e8;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">'
+        +'<strong style="color:#c0392b">⚠ This item is booked today!</strong><br>'
+        +'Booked by: '+esc(activeBooking.employee)+' · Job: '+esc(activeBooking.job)+'<br>'
+        +'Period: '+activeBooking.from+' → '+activeBooking.to
+        +'</div>';
+    } else if (upcomingBooking) {
+      bookingWarning = '<div style="background:#fef3e0;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">'
+        +'<strong style="color:#d4830a">📅 Upcoming booking</strong><br>'
+        +'Booked by: '+esc(upcomingBooking.employee)+' · Job: '+esc(upcomingBooking.job)+'<br>'
+        +'From: '+upcomingBooking.from+' → '+upcomingBooking.to
+        +'</div>';
+    }
+    document.getElementById('conf-body').innerHTML = bookingWarning + 'Check out <strong>' + esc(item.name) + '</strong> to <strong>' + esc(emp) + '</strong>?';
     document.getElementById('conf-btn').textContent = 'Check out';
     document.getElementById('conf-btn').className = 'btn danger'; document.getElementById('conf-btn').style.flex = '1';
     document.getElementById('modal-confirm').classList.add('open');
@@ -847,6 +870,16 @@ function addItem() {
   saveCloud(); renderItems(); renderBkForm(); updateHdr(); toast('Item added ✓');
 }
 
+function toggleCat(catId) {
+  var el = document.getElementById(catId);
+  var arrow = document.getElementById('cat-arrow-'+catId);
+  if (!el) return;
+  var isOpen = el.style.display !== 'none';
+  el.style.display = isOpen ? 'none' : 'block';
+  if (arrow) arrow.textContent = isOpen ? '▸' : '▾';
+  localStorage.setItem('cat-open-'+catId, isOpen ? 'false' : 'true');
+}
+
 function getCats() {
   var cats = [];
   db.items.forEach(function(i) { var c=i.category||''; if(c&&cats.indexOf(c)===-1) cats.push(c); });
@@ -928,7 +961,16 @@ function renderItems() {
   cats.sort(function(a,b) { if(!a&&b) return 1; if(a&&!b) return -1; return a.localeCompare(b); });
   cats.forEach(function(cat) {
     var catItems = db.items.map(function(item,i){return{item:item,i:i};}).filter(function(x){return (x.item.category||'')=== cat;});
-    if (cat) html += '<div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;padding:0 2px">'+esc(cat)+'</div>';
+    var catLabel = cat || 'Uncategorised';
+    var catId = 'cat-' + catLabel.replace(/[^a-zA-Z0-9]/g,'-');
+    var isOpen = localStorage.getItem('cat-open-'+catId) !== 'false'; // default open
+    html += '<div style="margin:10px 0 4px">'
+      +'<button data-catid="'+catId+'" onclick="toggleCat(this.dataset.catid)" style="width:100%;text-align:left;background:#f0f0f0;border:none;border-radius:8px;padding:8px 12px;font-family:Arial,sans-serif;font-size:12px;font-weight:700;color:#555;cursor:pointer;display:flex;justify-content:space-between;align-items:center;text-transform:uppercase;letter-spacing:.5px">'
+      +esc(catLabel)
+      +' <span id="cat-arrow-'+catId+'" style="font-size:14px">'+(isOpen?'▾':'▸')+'</span>'
+      +'</button>'
+      +'</div>'
+      +'<div id="'+catId+'" style="display:'+(isOpen?'block':'none')+'">';
     for(var ci=0;ci<catItems.length;ci++){
       var item=catItems[ci].item, i=catItems[ci].i;
     var item=db.items[i],nb=null;
@@ -968,6 +1010,7 @@ function renderItems() {
         +'</div></div></div>';
     }
     }
+    html += '</div>'; // close category div
   });
   el.innerHTML=html;
 }
