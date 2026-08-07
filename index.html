@@ -1668,5 +1668,29 @@ window.addEventListener('DOMContentLoaded', function() { loadCloud(); });
   </div>
 </div>
 
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('/sw.js')
+      .then(function(reg) {
+        // Check for updates every time app loads
+        reg.addEventListener('updatefound', function() {
+          var newWorker = reg.installing;
+          newWorker.addEventListener('statechange', function() {
+            if (newWorker.state === 'activated') {
+              // New version installed - reload to get fresh app
+              window.location.reload();
+            }
+          });
+        });
+        // Also check for update on every visit
+        reg.update();
+      })
+      .catch(function(err) {
+        console.log('SW registration failed:', err);
+      });
+  });
+}
+</script>
 </body>
 </html>
