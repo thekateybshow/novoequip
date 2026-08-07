@@ -229,6 +229,13 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
         <label>Total quantity in stock</label>
         <input type="number" id="new-item-qty" placeholder="e.g. 20" min="1" value="1">
       </div>
+      <div class="field" id="item-bulk-id-field" style="display:none">
+        <label>Item ID / QR code</label>
+        <div class="row">
+          <input type="text" id="new-bulk-id" placeholder="e.g. BOLLARDS-01">
+          <button class="btn sm" onclick="autoBulkId()">Auto</button>
+        </div>
+      </div>
       <div class="field">
         <label>Colour (for calendar)</label>
         <div class="row" style="flex-wrap:wrap;gap:8px" id="colour-picker">
@@ -578,10 +585,10 @@ function stopScan() {
   if (st) st.style.display = 'block'; if (sa) sa.style.display = 'none';
 }
 
-function processCode(code) {
+function processCode(rawCode) {
   var mc = document.getElementById('manual-code'); if (mc) mc.value = '';
-  if (!code) return;
-  var code = code.trim();
+  if (!rawCode) return;
+  var code = rawCode.trim();
   var item = null; for (var i = 0; i < db.items.length; i++) { if (db.items[i].id.toLowerCase() === code.toLowerCase()) { item = db.items[i]; break; } }
   var re = document.getElementById('scan-result');
   if (!item) {
@@ -802,7 +809,8 @@ function addBooking() {
 }
 
 function cancelBk(id) {
-  if(!confirm('Cancel this booking?')) return;
+  if(!IS_ADMIN){alert('Admin access required to delete bookings.');return;}
+  if(!confirm('Delete this booking? This cannot be undone.')) return;
   var b=db.bookings.filter(function(x){return x.id===id;})[0]; if(b) b.status='cancelled';
   saveCloud(); renderCal(); renderBkList(); updateHdr(); toast('Booking cancelled');
 }
@@ -816,6 +824,11 @@ function renderBkList() {
 
 // ─── Items ─────────────────────────────────────────────────────────────────
 function autoId() { document.getElementById('new-item-id').value='ITEM-'+String(db.items.length+1).padStart(3,'0'); }
+function autoBulkId() {
+  var name = document.getElementById('new-item-name').value.trim();
+  var base = name ? name.replace(/[^a-zA-Z0-9]/g,'-').toUpperCase() : 'BULK';
+  document.getElementById('new-bulk-id').value = base+'-'+String(db.items.length+1).padStart(3,'0');
+}
 
 function selectColour(btn) {
   document.querySelectorAll('.colour-btn').forEach(function(b) { b.style.border='2px solid transparent'; });
@@ -836,10 +849,14 @@ function setItemType(type) {
     sb.style.background='#1a1a1a'; sb.style.color='#fff'; sb.style.borderColor='#1a1a1a';
     bb.style.background='#fff'; bb.style.color='#888'; bb.style.borderColor='#ddd';
     idField.style.display='block'; qtyField.style.display='none';
+    var bulkIdField=document.getElementById('item-bulk-id-field');
+    if(bulkIdField) bulkIdField.style.display='none';
   } else {
     bb.style.background='#1a1a1a'; bb.style.color='#fff'; bb.style.borderColor='#1a1a1a';
     sb.style.background='#fff'; sb.style.color='#888'; sb.style.borderColor='#ddd';
     idField.style.display='none'; qtyField.style.display='block';
+    var bulkIdField=document.getElementById('item-bulk-id-field');
+    if(bulkIdField) bulkIdField.style.display='block';
   }
 }
 
@@ -851,7 +868,11 @@ function addItem() {
   if(!name){alert('Enter item name.');return;}
   if(type==='bulk') {
     var qty=parseInt(document.getElementById('new-item-qty').value)||1;
-    var id='BULK-'+name.replace(/[^a-zA-Z0-9]/g,'-').toUpperCase()+'-'+Date.now().toString().slice(-4);
+    var bulkCustomId = document.getElementById('new-bulk-id').value.trim();
+    var id = bulkCustomId || ('BULK-'+name.replace(/[^a-zA-Z0-9]/g,'-').toUpperCase()+'-'+Date.now().toString().slice(-4));
+    // Check for duplicate ID
+    if(db.items.some(function(x){return x.id.toLowerCase()===id.toLowerCase();})){alert('That Item ID already exists.');return;}
+    document.getElementById('new-bulk-id').value='';
     var cat=document.getElementById('new-item-cat').value;
     db.items.push({id:id,name:name,colour:colour,category:cat,type:'bulk',totalQty:qty,allocations:[],status:'in',employee:null,job:null,since:null});
     document.getElementById('new-item-name').value='';
@@ -887,19 +908,21 @@ function getCats() {
 }
 
 function prefillFromFlag(fi) {
-  var flag = (db.flags||[])[parseInt(fi)]; if (!flag) return;
+  var flag = (db.flags||[]).filter(function(f,i){return f.id===fi||String(i)===String(fi);})[0]; if (!flag) return;
   document.getElementById('new-item-name').value = flag.description;
   document.getElementById('new-item-id').value = flag.code;
   document.getElementById('add-item-card').scrollIntoView({behavior:'smooth'});
   toast('Prefilled from flag — review and add');
 }
 
-function dismissFlag(fi) {
-  if (!confirm('Dismiss this flag?')) return;
+function dismissFlag(flagId) {
+  if (!confirm('Delete this notification?')) return;
   var flags = db.flags || [];
-  flags[parseInt(fi)].resolved = true;
+  // Find by id field, not array index
+  var flag = flags.filter(function(f){return f.id===flagId;})[0];
+  if (flag) flag.resolved = true;
   db.flags = flags;
-  saveCloud(); renderItems(); toast('Flag dismissed');
+  saveCloud(); renderItems(); toast('Notification deleted');
 }
 
 function addCategoryPrompt() {
@@ -942,7 +965,7 @@ function renderItems() {
           +'<div style="font-size:11px;color:#aaa">Reported by: '+esc(f.reportedBy)+' · '+esc(f.time)+'</div>'
           +'<div class="row" style="gap:6px;margin-top:8px">'
           +'<button class="btn sm primary" data-fi="'+fi+'" onclick="prefillFromFlag(this.dataset.fi)">+ Add to system</button>'
-          +'<button class="btn sm danger" data-fi="'+fi+'" onclick="dismissFlag(this.dataset.fi)">🗑 Delete</button>'
+          +'<button class="btn sm danger" data-flagid="'+esc(f.id||String(fi))+'" onclick="dismissFlag(this.dataset.flagid)">🗑 Delete</button>'
           +'</div></div>';
       });
       fh += '</div>';
@@ -1159,7 +1182,9 @@ function showQR(idx) {
   setTimeout(function(){
     d.innerHTML='';
     var img=document.createElement('img');
-    img.src='https://api.qrserver.com/v1/create-qr-code/?size=220x220&data='+encodeURIComponent(item.id);
+    // Use exact item.id as QR data - scanner must read this exact string
+    var qrData = item.id;
+    img.src='https://api.qrserver.com/v1/create-qr-code/?size=220x220&data='+encodeURIComponent(qrData)+'&format=png&qzone=1';
     img.width=220; img.height=220; img.style.display='block';
     img.onerror=function(){d.innerHTML='<div style="color:#c0392b;font-size:13px;padding:10px">Could not generate QR. Check internet connection.</div>';};
     d.appendChild(img);
@@ -1288,6 +1313,8 @@ var _showingReturn = false;
 function showBulkModal(item, emp) {
   _bulkItem = item; _showingReturn = false;
   document.getElementById('bulk-title').textContent = item.name;
+  var bid = document.getElementById('bulk-item-id');
+  if (bid) bid.textContent = item.id;
   // Populate employee dropdowns
   var sel1 = document.getElementById('bulk-emp');
   var sel2 = document.getElementById('bulk-return-emp');
@@ -1607,6 +1634,8 @@ window.addEventListener('DOMContentLoaded', function() { loadCloud(); });
       <button class="btn success full" onclick="confirmBulkIn()" style="margin-bottom:8px">↓ Return items</button>
     </div>
     <button class="btn full" id="bulk-toggle-btn" onclick="toggleBulkSection()" style="margin-bottom:8px;color:#666">Show return section</button>
+    <div class="divider"></div>
+    <div style="font-size:11px;color:#bbb;text-align:center;margin-bottom:6px">Item ID: <span id="bulk-item-id"></span></div>
     <button class="btn full" onclick="closeModal('modal-bulk')" style="color:#aaa;border-color:#eee;font-size:12px">Cancel</button>
   </div>
 </div>
