@@ -643,27 +643,36 @@ document.getElementById('conf-btn').onclick = function() {
   try {
     if (!pendingAction) return;
     var now = new Date().toLocaleString('en-AU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+    // Always look up item fresh from db by id to avoid stale reference
+    var itemId = pendingAction.item ? pendingAction.item.id : null;
+    var item = itemId ? db.items.filter(function(x){return x.id===itemId;})[0] : null;
+    if (!item && pendingAction.type !== 'transfer') {
+      alert('Item not found. Please try scanning again.');
+      closeModal('modal-confirm'); return;
+    }
     if (pendingAction.type === 'out') {
-      var item = pendingAction.item, emp = pendingAction.emp;
+      var emp = pendingAction.emp;
       item.status = 'out'; item.employee = emp; item.job = '—'; item.since = now;
       db.log.push({ action:'out', itemId:item.id, itemName:item.name, employee:emp, job:'—', time:now });
       showScanResult('<div class="card" style="border-color:#e0b0b0"><div style="font-weight:700;color:#c0392b">↑ Checked out</div><div class="isub">' + esc(item.name) + ' → ' + esc(emp) + '</div></div>');
       toast('Checked out ✓');
     } else if (pendingAction.type === 'transfer') {
-      var item = pendingAction.item, fromEmp = pendingAction.fromEmp, toEmp = pendingAction.toEmp;
-      db.log.push({ action:'transfer', itemId:item.id, itemName:item.name, employee:toEmp, fromEmployee:fromEmp, job:item.job, time:now });
+      var fromEmp = pendingAction.fromEmp, toEmp = pendingAction.toEmp;
+      if (!item) item = pendingAction.item;
+      db.log.push({ action:'transfer', itemId:item.id, itemName:item.name, employee:toEmp, fromEmployee:fromEmp, job:item.job||'—', time:now });
       item.employee = toEmp; item.since = now;
       showScanResult('<div class="card" style="border-color:#b0b8e0"><div style="font-weight:700;color:#2c3e9e">⇄ Transferred</div><div class="isub">' + esc(item.name) + ': ' + esc(fromEmp) + ' → ' + esc(toEmp) + '</div></div>');
       toast('Transferred ✓');
     } else {
-      var item = pendingAction.item;
-      db.log.push({ action:'in', itemId:item.id, itemName:item.name, employee:item.employee, job:item.job, time:now });
+      var logEmployee = item.employee || (pendingAction.item ? pendingAction.item.employee : '');
+      var logJob = item.job || (pendingAction.item ? pendingAction.item.job : '');
+      db.log.push({ action:'in', itemId:item.id, itemName:item.name, employee:logEmployee, job:logJob, time:now });
       item.status = 'in'; item.employee = null; item.job = null; item.since = null;
       showScanResult('<div class="card" style="border-color:#b0d8b0"><div style="font-weight:700;color:#27ae60">↓ Returned</div><div class="isub">' + esc(item.name) + ' back in storage</div></div>');
       toast('Returned ✓');
     }
     saveCloud(); renderAll(); closeModal('modal-confirm');
-  } catch(e) { alert('Error: ' + e.message); }
+  } catch(e) { alert('Error processing: ' + e.message + '. Please try again.'); }
 };
 
 function showScanResult(html) { var el = document.getElementById('scan-result'); el.style.display = 'block'; el.innerHTML = html; setTimeout(function() { el.style.display = 'none'; }, 4000); }
@@ -908,20 +917,34 @@ function getCats() {
 }
 
 function prefillFromFlag(fi) {
-  var flag = (db.flags||[]).filter(function(f,i){return f.id===fi||String(i)===String(fi);})[0]; if (!flag) return;
+  var flag = (db.flags||[]).filter(function(f,i){return f.id===fi||String(f.id)===String(fi)||String(i)===String(fi);})[0];
+  if (!flag) return;
+  // Switch to single item type and scroll to form
+  setItemType('single');
+  // Clear then fill name - worker description goes in name field
   document.getElementById('new-item-name').value = flag.description;
-  document.getElementById('new-item-id').value = flag.code;
-  document.getElementById('add-item-card').scrollIntoView({behavior:'smooth'});
-  toast('Prefilled from flag — review and add');
+  // Clear the ID field so admin must enter a proper asset ID
+  document.getElementById('new-item-id').value = '';
+  // Clear the bulk ID too
+  var bid = document.getElementById('new-bulk-id');
+  if (bid) bid.value = '';
+  // Show the form
+  var card = document.getElementById('add-item-card');
+  if (card) { card.style.display='block'; card.scrollIntoView({behavior:'smooth'}); }
+  // Focus the ID field so admin knows to fill it in
+  setTimeout(function(){ 
+    var idField = document.getElementById('new-item-id');
+    if (idField) idField.focus();
+  }, 500);
+  toast('Item name prefilled — enter the Item ID to complete');
 }
 
 function dismissFlag(flagId) {
   if (!confirm('Delete this notification?')) return;
-  var flags = db.flags || [];
-  // Find by id field, not array index
-  var flag = flags.filter(function(f){return f.id===flagId;})[0];
-  if (flag) flag.resolved = true;
-  db.flags = flags;
+  // Remove entirely rather than marking resolved - prevents reappearing
+  db.flags = (db.flags || []).filter(function(f){
+    return f.id !== flagId && String(f.id) !== String(flagId);
+  });
   saveCloud(); renderItems(); toast('Notification deleted');
 }
 
