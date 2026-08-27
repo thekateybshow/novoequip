@@ -423,18 +423,32 @@ function loadCloud() {
   .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
   .then(function(rows) {
     if (rows && rows.length > 0 && rows[0].data) {
-      var d = JSON.parse(rows[0].data);
-      if (d && typeof d === 'object') {
-        db = d;
-        if (!db.items) db.items = [];
-        if (!db.employees) db.employees = [];
-        if (!db.log) db.log = [];
-        if (!db.bookings) db.bookings = [];
+      try {
+        var d = JSON.parse(rows[0].data);
+        if (d && typeof d === 'object' && !Array.isArray(d)) {
+          // Only overwrite if cloud has more data or same data
+          // Prevents empty cloud response wiping local data
+          var cloudItems = (d.items||[]).length;
+          var cloudEmps = (d.employees||[]).length;
+          var localItems = db.items.length;
+          var localEmps = db.employees.length;
+          if (cloudItems >= localItems || cloudEmps >= localEmps || db.items.length === 0) {
+            db = d;
+            if (!db.items) db.items = [];
+            if (!db.employees) db.employees = [];
+            if (!db.log) db.log = [];
+            if (!db.bookings) db.bookings = [];
+            if (!db.flags) db.flags = [];
+          }
+        }
+      } catch(parseErr) {
+        console.error('Failed to parse cloud data:', parseErr);
+        // Keep existing db, don't overwrite with corrupt data
       }
-    } else {
-      // No data yet - create first row
-      db = { items: [], employees: [], log: [], bookings: [] };
-      initCloud();
+    } else if (db.items.length === 0) {
+      // Only init if we genuinely have no data
+      db = { items: [], employees: [], log: [], bookings: [], flags: [] };
+      saveCloud(); // Write initial empty state
     }
     saveLocal(); setSS('ok', 'Synced'); renderAll();
   })
@@ -462,41 +476,38 @@ function initCloud() {
 function saveCloud() {
   saveLocal();
   setSS('busy', 'Saving...');
-  fetch(SUPABASE_URL + '/rest/v1/equipdata?id=eq.1', {
-    method: 'PATCH',
+  // Use UPSERT (POST with Prefer: resolution=merge-duplicates)
+  // This always writes correctly whether row exists or not
+  fetch(SUPABASE_URL + '/rest/v1/equipdata', {
+    method: 'POST',
     headers: {
       'apikey': SUPABASE_KEY,
       'Authorization': 'Bearer ' + SUPABASE_KEY,
       'Content-Type': 'application/json',
-      'Prefer': 'return=minimal'
+      'Prefer': 'resolution=merge-duplicates,return=minimal'
     },
-    body: JSON.stringify({ data: JSON.stringify(db) })
+    body: JSON.stringify({ id: 1, data: JSON.stringify(db) })
   })
   .then(function(r) {
-    if (r.status === 404 || r.status === 406) {
-      // Row doesn't exist yet - insert it
-      return fetch(SUPABASE_URL + '/rest/v1/equipdata', {
-        method: 'POST',
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': 'Bearer ' + SUPABASE_KEY,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=minimal'
-        },
-        body: JSON.stringify({ id: 1, data: JSON.stringify(db) })
-      });
-    }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     setSS('ok', 'Saved ✓');
   })
-  .then(function() { setSS('ok', 'Saved ✓'); })
   .catch(function(e) {
     setSS('err', 'Save failed');
     toast('⚠ Save failed: ' + e.message);
+    console.error('saveCloud error:', e);
   });
 }
 
 function saveLocal() { try { localStorage.setItem('et-db', JSON.stringify(db)); } catch(e) {} }
+
+var _saveTimer = null;
+function saveCloudDebounced() {
+  // Save local immediately, cloud after short delay to batch rapid changes
+  saveLocal();
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(function() { saveCloud(); }, 300);
+}
 function loadLocal() { try { var d = localStorage.getItem('et-db'); if (d) { db = JSON.parse(d); if (!db.items) db.items = []; if (!db.employees) db.employees = []; if (!db.log) db.log = []; if (!db.bookings) db.bookings = []; } } catch(e) {} }
 function syncNow() { loadCloud(); }
 
@@ -671,7 +682,7 @@ document.getElementById('conf-btn').onclick = function() {
       showScanResult('<div class="card" style="border-color:#b0d8b0"><div style="font-weight:700;color:#27ae60">↓ Returned</div><div class="isub">' + esc(item.name) + ' back in storage</div></div>');
       toast('Returned ✓');
     }
-    saveCloud(); renderAll(); closeModal('modal-confirm');
+    saveCloudDebounced(); renderAll(); closeModal('modal-confirm');
   } catch(e) { alert('Error processing: ' + e.message + '. Please try again.'); }
 };
 
