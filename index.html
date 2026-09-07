@@ -111,7 +111,6 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
       <div class="sync-dot busy" id="sync-dot"></div>
       <span class="sync-lbl" id="sync-lbl">Syncing</span>
       <button class="hdr-btn" onclick="syncNow()">↻ Sync</button>
-      <button class="hdr-btn" onclick="runDiag()" style="background:rgba(255,165,0,.2);border-color:rgba(255,165,0,.4)" title="Diagnose connection">🔍</button>
       <button class="hdr-btn" id="admin-btn" onclick="toggleAdmin()">🔒</button>
     </div>
   </div>
@@ -256,6 +255,7 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
     </div>
     <div id="no-admin-items" class="card" style="display:none;text-align:center;color:#aaa;font-size:13px;margin-bottom:10px">🔒 Admin access required to add items</div>
     <div id="flags-card" style="display:none;margin-bottom:10px"></div>
+    <div id="diag-btn-wrap" style="display:none;margin-bottom:10px"><button class="btn full" onclick="runDiag()" style="color:#888;border-color:#ddd;font-size:12px">🔍 Test connection</button></div>
 
     <div class="card" id="csv-import-card" style="margin-bottom:10px;display:none">
       <div style="font-size:13px;font-weight:700;margin-bottom:8px">📂 Import from CSV</div>
@@ -591,6 +591,8 @@ function renderAll() {
   var ae = document.getElementById('add-emp-card'); var ne = document.getElementById('no-admin-emp');
   var ab = document.getElementById('admin-badge'); var abtn = document.getElementById('admin-btn');
   var clr = document.getElementById('clear-log-btn');
+  var diagWrap = document.getElementById('diag-btn-wrap');
+  if (diagWrap) diagWrap.style.display = IS_ADMIN ? 'block' : 'none';
   if (ai) ai.style.display = IS_ADMIN ? 'block' : 'none';
   if (ni) ni.style.display = IS_ADMIN ? 'none' : 'block';
   var ci = document.getElementById('csv-import-card');
