@@ -111,6 +111,7 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
       <div class="sync-dot busy" id="sync-dot"></div>
       <span class="sync-lbl" id="sync-lbl">Syncing</span>
       <button class="hdr-btn" onclick="syncNow()">↻ Sync</button>
+      <button class="hdr-btn" onclick="runDiag()" style="background:rgba(255,165,0,.2);border-color:rgba(255,165,0,.4)" title="Diagnose connection">🔍</button>
       <button class="hdr-btn" id="admin-btn" onclick="toggleAdmin()">🔒</button>
     </div>
   </div>
@@ -448,8 +449,10 @@ function loadCloud() {
     } else if (db.items.length === 0) {
       // Only init if we genuinely have no data
       db = { items: [], employees: [], log: [], bookings: [], flags: [] };
-      saveCloud(); // Write initial empty state
+      saveCloudDebounced(); // Write initial empty state
     }
+    if (!db.categories) db.categories = [];
+    if (!db.flags) db.flags = [];
     saveLocal(); setSS('ok', 'Synced'); renderAll();
   })
   .catch(function(e) {
@@ -489,13 +492,19 @@ function saveCloud() {
     body: JSON.stringify({ id: 1, data: JSON.stringify(db) })
   })
   .then(function(r) {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) {
+      return r.text().then(function(body) {
+        throw new Error('HTTP ' + r.status + ': ' + body.slice(0,120));
+      });
+    }
     setSS('ok', 'Saved ✓');
   })
   .catch(function(e) {
     setSS('err', 'Save failed');
-    toast('⚠ Save failed: ' + e.message);
-    console.error('saveCloud error:', e);
+    // Show full error so we can diagnose
+    toast('⚠ ' + e.message.slice(0,80));
+    document.getElementById('sync-lbl').textContent = e.message.slice(0,30);
+    console.error('saveCloud error:', e.message);
   });
 }
 
@@ -512,6 +521,48 @@ function loadLocal() { try { var d = localStorage.getItem('et-db'); if (d) { db 
 function syncNow() { loadCloud(); }
 
 // ─── Admin ─────────────────────────────────────────────────────────────────
+function runDiag() {
+  var msg = 'Diagnosing connection...';
+  setSS('busy', 'Testing...');
+  // Test read
+  fetch(SUPABASE_URL + '/rest/v1/equipdata?id=eq.1&select=data', {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY }
+  })
+  .then(function(r) {
+    return r.text().then(function(t) { return {status: r.status, body: t}; });
+  })
+  .then(function(res) {
+    var readOk = res.status === 200;
+    // Test write
+    return fetch(SUPABASE_URL + '/rest/v1/equipdata', {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify({ id: 1, data: JSON.stringify(db) })
+    }).then(function(wr) {
+      return wr.text().then(function(wt) {
+        var result = 'READ: HTTP ' + res.status + (readOk ? ' ✓' : ' ✗') + '\n';
+        result += 'WRITE: HTTP ' + wr.status + (wr.ok ? ' ✓' : ' ✗') + '\n';
+        if (!wr.ok) result += 'Error: ' + wt.slice(0,200) + '\n';
+        result += '\nURL: ' + SUPABASE_URL;
+        if (!readOk || !wr.ok) {
+          result += '\n\nFIX: Go to Supabase → Table Editor → equipdata → RLS → make sure it is DISABLED';
+        }
+        alert(result);
+        setSS(wr.ok ? 'ok' : 'err', wr.ok ? 'OK' : 'Error');
+      });
+    });
+  })
+  .catch(function(e) {
+    alert('Connection failed: ' + e.message + '\n\nCheck internet connection.');
+    setSS('err', 'Error');
+  });
+}
+
 function toggleAdmin() {
   if (IS_ADMIN) {
     IS_ADMIN = false; renderAll(); toast('Admin mode off');
@@ -616,7 +667,7 @@ function processCode(rawCode) {
     return;
   }
   if (item.status === 'in') {
-    if (!emp) { alert('Please select an employee first.'); return; }
+    if (!emp) { toast('⚠ Please select an employee first.'); return; return; }
     pendingAction = { type: 'out', item: item, emp: emp, job: '---' };
     document.getElementById('conf-title').textContent = 'Check out item';
     // Check if item has upcoming or current bookings
@@ -653,6 +704,10 @@ function processCode(rawCode) {
 document.getElementById('conf-btn').onclick = function() {
   try {
     if (!pendingAction) return;
+    // Prevent double-tap
+    this.disabled = true;
+    var self = this;
+    setTimeout(function(){ self.disabled = false; }, 2000);
     var now = new Date().toLocaleString('en-AU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
     // Always look up item fresh from db by id to avoid stale reference
     var itemId = pendingAction.item ? pendingAction.item.id : null;
@@ -701,7 +756,7 @@ function showTransferModal(item, emp) {
 
 function confirmTransfer() {
   var item = window._transferItem, toEmp = document.getElementById('transfer-emp').value;
-  if (!toEmp) { alert('Please select an employee.'); return; }
+  if (!toEmp) { toast('⚠ Please select an employee.'); return; return; }
   pendingAction = { type: 'transfer', item: item, fromEmp: item.employee, toEmp: toEmp };
   closeModal('modal-transfer');
   document.getElementById('conf-title').textContent = 'Confirm transfer';
@@ -712,6 +767,7 @@ function confirmTransfer() {
 
 function confirmReturn() {
   var item = window._transferItem;
+  if (!item) { toast('⚠ No item selected. Please scan again.'); closeModal('modal-transfer'); return; }
   pendingAction = { type: 'in', item: item };
   closeModal('modal-transfer');
   document.getElementById('conf-title').textContent = 'Return item';
@@ -812,11 +868,11 @@ function addBooking() {
   var itemId=document.getElementById('bk-item').value,emp=document.getElementById('bk-emp').value;
   var from=document.getElementById('bk-from').value,to=document.getElementById('bk-to').value;
   var job=document.getElementById('bk-job').value.trim();
-  if(!itemId||!emp||!from||!to){alert('Please fill in all booking fields.');return;}
+  if(!itemId||!emp||!from||!to){toast('⚠ Please fill in all fields.'); return;return;}
   // Check if selected employee has booking permission
   var empObj=db.employees.filter(function(e){return e.name===emp;})[0];
-  if(empObj && empObj.canBook===false && !IS_ADMIN){alert('No booking permission. Contact your admin.');return;}
-  if(from>to){alert('End date must be on or after start date.');return;}
+  if(empObj && empObj.canBook===false && !IS_ADMIN){toast('⚠ No booking permission. Contact admin.'); return;return;}
+  if(from>to){toast('⚠ End date must be after start date.'); return;return;}
   var item=db.items.filter(function(i){return i.id===itemId;})[0];
   if(item.status==='out'){
     if(!confirm('⚠ '+item.name+' is currently checked out.\n\n👤 With: '+(item.employee||'?')+'\n🕐 Since: '+(item.since||'?')+'\n\nYou can still book future dates. Continue?')) return;
@@ -825,14 +881,14 @@ function addBooking() {
   if(clash){alert('❌ Booking conflict!\n\n'+item.name+' is already booked by '+clash.employee+'\nFrom: '+clash.from+' to '+clash.to+'\n\nPlease choose different dates.');return;}
   db.bookings.push({id:Date.now().toString(),itemId:itemId,itemName:item.name,employee:emp,from:from,to:to,job:job||'—',status:'active',created:new Date().toLocaleString('en-AU')});
   document.getElementById('bk-job').value='';
-  saveCloud(); renderCal(); renderBkList(); updateHdr(); toast('Booking created ✓');
+  saveCloudDebounced(); renderCal(); renderBkList(); updateHdr(); toast('Booking created ✓');
 }
 
 function cancelBk(id) {
-  if(!IS_ADMIN){alert('Admin access required to delete bookings.');return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
   if(!confirm('Delete this booking? This cannot be undone.')) return;
   var b=db.bookings.filter(function(x){return x.id===id;})[0]; if(b) b.status='cancelled';
-  saveCloud(); renderCal(); renderBkList(); updateHdr(); toast('Booking cancelled');
+  saveCloudDebounced(); renderCal(); renderBkList(); updateHdr(); toast('Booking cancelled');
 }
 
 function renderBkList() {
@@ -881,17 +937,17 @@ function setItemType(type) {
 }
 
 function addItem() {
-  if(!IS_ADMIN){alert('Admin access required.');return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
   var name=document.getElementById('new-item-name').value.trim();
   var type=document.getElementById('new-item-type').value;
   var colour=getSelectedColour();
-  if(!name){alert('Enter item name.');return;}
+  if(!name){toast('⚠ Enter item name.'); return;return;}
   if(type==='bulk') {
     var qty=parseInt(document.getElementById('new-item-qty').value)||1;
     var bulkCustomId = document.getElementById('new-bulk-id').value.trim();
     var id = bulkCustomId || ('BULK-'+name.replace(/[^a-zA-Z0-9]/g,'-').toUpperCase()+'-'+Date.now().toString().slice(-4));
     // Check for duplicate ID
-    if(db.items.some(function(x){return x.id.toLowerCase()===id.toLowerCase();})){alert('That Item ID already exists.');return;}
+    if(db.items.some(function(x){return x.id.toLowerCase()===id.toLowerCase();})){toast('⚠ That Item ID already exists.'); return;return;}
     document.getElementById('new-bulk-id').value='';
     var cat=document.getElementById('new-item-cat').value;
     db.items.push({id:id,name:name,colour:colour,category:cat,type:'bulk',totalQty:qty,allocations:[],status:'in',employee:null,job:null,since:null});
@@ -901,14 +957,14 @@ function addItem() {
   } else {
     var id=document.getElementById('new-item-id').value.trim();
     if(!id){alert('Enter item ID.');return;}
-    for(var i=0;i<db.items.length;i++){if(db.items[i].id===id){alert('That Item ID already exists.');return;}}
+    for(var i=0;i<db.items.length;i++){if(db.items[i].id===id){toast('⚠ That Item ID already exists.'); return;return;}}
     var cat=document.getElementById('new-item-cat').value;
     db.items.push({id:id,name:name,colour:colour,category:cat,type:'single',status:'in',employee:null,job:null,since:null});
     document.getElementById('new-item-name').value='';
     document.getElementById('new-item-id').value='';
     setItemType('single');
   }
-  saveCloud(); renderItems(); renderBkForm(); updateHdr(); toast('Item added ✓');
+  saveCloudDebounced(); renderItems(); renderBkForm(); updateHdr(); toast('Item added ✓');
 }
 
 function toggleCat(catId) {
@@ -953,10 +1009,10 @@ function prefillFromFlag(fi) {
 function dismissFlag(flagId) {
   if (!confirm('Delete this notification?')) return;
   // Remove entirely rather than marking resolved - prevents reappearing
-  db.flags = (db.flags || []).filter(function(f){
+  db.flags = (db.flags||[]).filter(function(f){
     return f.id !== flagId && String(f.id) !== String(flagId);
   });
-  saveCloud(); renderItems(); toast('Notification deleted');
+  saveCloudDebounced(); renderItems(); toast('Notification deleted');
 }
 
 function addCategoryPrompt() {
@@ -964,7 +1020,7 @@ function addCategoryPrompt() {
   if (!name || !name.trim()) return;
   name = name.trim();
   if (!db.categories) db.categories = [];
-  if (db.categories.indexOf(name) === -1) { db.categories.push(name); db.categories.sort(); saveCloud(); }
+  if (db.categories.indexOf(name) === -1) { db.categories.push(name); db.categories.sort(); saveCloudDebounced(); }
   renderCatDropdown('new-item-cat', name);
   renderCatDropdown('edit-item-cat', name);
 }
@@ -1073,7 +1129,7 @@ function renderItems() {
 }
 
 function delItem(idx) {
-  if(!IS_ADMIN){alert('Admin access required.');return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
   var item=db.items[parseInt(idx)]; if(!item) return;
   var pw=prompt('Enter admin password to delete this item:');
   if(!pw||pw!==ADMIN_PASSWORD){alert('Incorrect password.');return;}
@@ -1084,20 +1140,20 @@ function delItem(idx) {
   if(!confirm(msg)) return;
   db.items=db.items.filter(function(i){return i.id!==item.id;});
   db.bookings=db.bookings.filter(function(b){return b.itemId!==item.id;});
-  saveCloud(); renderItems(); renderCal(); renderBkList(); renderBkForm(); updateHdr(); toast('Item deleted');
+  saveCloudDebounced(); renderItems(); renderCal(); renderBkList(); renderBkForm(); updateHdr(); toast('Item deleted');
 }
 
 // ─── Staff ─────────────────────────────────────────────────────────────────
 function addEmp() {
-  if(!IS_ADMIN){alert('Admin access required.');return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
   var name=document.getElementById('new-emp').value.trim(); if(!name) return;
-  for(var i=0;i<db.employees.length;i++){if(db.employees[i].name.toLowerCase()===name.toLowerCase()){alert('Already exists.');return;}}
+  for(var i=0;i<db.employees.length;i++){if(db.employees[i].name.toLowerCase()===name.toLowerCase()){toast('⚠ Employee already exists.'); return;return;}}
   var canBook = document.getElementById('new-emp-can-book').value === 'true';
   db.employees.push({name:name, canBook:canBook}); 
   db.employees.sort(function(a,b){return a.name.localeCompare(b.name);});
   document.getElementById('new-emp').value='';
   setRoleBtn(false);
-  saveCloud(); renderEmps(); renderScanEmps(); renderBkForm(); toast('Added ✓');
+  saveCloudDebounced(); renderEmps(); renderScanEmps(); renderBkForm(); toast('Added ✓');
 }
 
 function renderEmps() {
@@ -1122,7 +1178,7 @@ function renderEmps() {
 }
 
 function delEmp(idx) {
-  if(!IS_ADMIN){alert('Admin access required.');return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
   var emp=db.employees[parseInt(idx)]; if(!emp) return;
   var pw=prompt('Enter admin password to remove this employee:');
   if(!pw||pw!==ADMIN_PASSWORD){alert('Incorrect password.');return;}
@@ -1134,7 +1190,7 @@ function delEmp(idx) {
   msg+='\n\nAre you sure?';
   if(!confirm(msg)) return;
   db.employees=db.employees.filter(function(e){return e.name!==emp.name;});
-  saveCloud(); renderEmps(); renderScanEmps(); renderBkForm(); toast('Removed');
+  saveCloudDebounced(); renderEmps(); renderScanEmps(); renderBkForm(); toast('Removed');
 }
 
 // ─── Log ───────────────────────────────────────────────────────────────────
@@ -1192,9 +1248,9 @@ function renderLog() {
 }
 
 function clearLog() {
-  if(!IS_ADMIN){alert('Admin access required.');return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
   if(!confirm('Clear all log entries?')) return;
-  db.log=[]; saveCloud(); renderLog(); toast('Log cleared');
+  db.log=[]; saveCloudDebounced(); renderLog(); toast('Log cleared');
 }
 
 // ─── Export ────────────────────────────────────────────────────────────────
@@ -1329,7 +1385,7 @@ function confirmCSVImport() {
   csvPendingItems.forEach(function(item) {
     db.items.push({ id: item.id, name: item.name, colour: item.colour, status: 'in', employee: null, job: null, since: null });
   });
-  saveCloud(); renderItems(); renderBkForm(); updateHdr();
+  saveCloudDebounced(); renderItems(); renderBkForm(); updateHdr();
   toast(csvPendingItems.length + ' items imported ✓');
   cancelCSVImport();
 }
@@ -1409,7 +1465,7 @@ function confirmBulkOut() {
   item.allocations = allocs;
   var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
   db.log.push({action:'bulk-out',itemId:item.id,itemName:item.name,employee:emp,qty:qty,time:now});
-  saveCloud(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' checked out to ' + emp + ' ✓');
+  saveCloudDebounced(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' checked out to ' + emp + ' ✓');
 }
 
 function confirmBulkIn() {
@@ -1427,7 +1483,7 @@ function confirmBulkIn() {
   if (existing.qty === 0) item.allocations = allocs.filter(function(a){return a.employee!==emp;});
   var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
   db.log.push({action:'bulk-in',itemId:item.id,itemName:item.name,employee:emp,qty:qty,time:now});
-  saveCloud(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' returned from ' + emp + ' ✓');
+  saveCloudDebounced(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' returned from ' + emp + ' ✓');
 }
 
 // ─── Role toggle helpers ───────────────────────────────────────────────────
@@ -1471,7 +1527,7 @@ function saveEmpEdit() {
   var emp = db.employees[idx]; if (!emp) return;
   var newName = document.getElementById('edit-emp-name').value.trim();
   var canBook = document.getElementById('edit-emp-can-book').value === 'true';
-  if (!newName) { alert('Name cannot be empty.'); return; }
+  if (!newName) { toast('⚠ Name cannot be empty.'); return; return; }
   var oldName = emp.name;
   emp.name = newName;
   emp.canBook = canBook;
@@ -1480,7 +1536,7 @@ function saveEmpEdit() {
   db.log.forEach(function(l) { if (l.employee === oldName) l.employee = newName; if (l.fromEmployee === oldName) l.fromEmployee = newName; });
   db.bookings.forEach(function(b) { if (b.employee === oldName) b.employee = newName; });
   db.employees.sort(function(a,b){return a.name.localeCompare(b.name);});
-  saveCloud(); renderEmps(); renderScanEmps(); renderBkForm(); closeModal('modal-edit-emp'); toast('Employee updated ✓');
+  saveCloudDebounced(); renderEmps(); renderScanEmps(); renderBkForm(); closeModal('modal-edit-emp'); toast('Employee updated ✓');
 }
 
 // ─── Edit Item ──────────────────────────────────────────────────────────────
@@ -1523,7 +1579,7 @@ function saveItemEdit() {
   // Update references
   db.bookings.forEach(function(b) { if (b.itemId === oldId) { b.itemId = newId; b.itemName = newName; } });
   db.log.forEach(function(l) { if (l.itemId === oldId) { l.itemId = newId; l.itemName = newName; } });
-  saveCloud(); renderItems(); renderBkForm(); renderCal(); closeModal('modal-edit-item'); toast('Item updated ✓');
+  saveCloudDebounced(); renderItems(); renderBkForm(); renderCal(); closeModal('modal-edit-item'); toast('Item updated ✓');
 }
 
 // ─── No QR Code Report ─────────────────────────────────────────────────────
@@ -1543,12 +1599,12 @@ function submitNoQR() {
   var name = document.getElementById('noqr-name').value.trim();
   var emp = document.getElementById('noqr-emp').value;
   var notes = document.getElementById('noqr-notes').value.trim();
-  if (!name) { alert('Please enter a description of the item.'); return; }
-  if (!emp) { alert('Please select your name.'); return; }
+  if (!name) { toast('⚠ Please enter a description.'); return; return; }
+  if (!emp) { toast('⚠ Please select your name.'); return; return; }
   var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
   if (!db.flags) db.flags = [];
-  db.flags.push({ id: Date.now().toString(), code: '', description: name, notes: notes, reportedBy: emp, time: now, resolved: false });
-  saveCloud();
+  (db.flags||(db.flags=[])) && db.flags.push({ id: Date.now().toString(), code: '', description: name, notes: notes, reportedBy: emp, time: now, resolved: false });
+  saveCloudDebounced();
   closeModal('modal-no-qr');
   toast('Sent to admin ✓');
 }
