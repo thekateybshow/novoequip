@@ -416,50 +416,39 @@ function setSS(state, lbl) { var d = document.getElementById('sync-dot'); var l 
 function loadCloud() {
   setSS('busy', 'Syncing...');
   fetch(SUPABASE_URL + '/rest/v1/equipdata?id=eq.1&select=data', {
-    headers: {
-      'apikey': SUPABASE_KEY,
-      'Authorization': 'Bearer ' + SUPABASE_KEY
-    }
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY }
   })
   .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
   .then(function(rows) {
     if (rows && rows.length > 0 && rows[0].data) {
       try {
-        var d = JSON.parse(rows[0].data);
-        if (d && typeof d === 'object' && !Array.isArray(d)) {
-          // Only overwrite if cloud has more data or same data
-          // Prevents empty cloud response wiping local data
-          var cloudItems = (d.items||[]).length;
-          var cloudEmps = (d.employees||[]).length;
-          var localItems = db.items.length;
-          var localEmps = db.employees.length;
-          if (cloudItems >= localItems || cloudEmps >= localEmps || db.items.length === 0) {
-            db = d;
-            if (!db.items) db.items = [];
-            if (!db.employees) db.employees = [];
-            if (!db.log) db.log = [];
-            if (!db.bookings) db.bookings = [];
-            if (!db.flags) db.flags = [];
-          }
-        }
-      } catch(parseErr) {
-        console.error('Failed to parse cloud data:', parseErr);
-        // Keep existing db, don't overwrite with corrupt data
-      }
-    } else if (db.items.length === 0) {
-      // Only init if we genuinely have no data
-      db = { items: [], employees: [], log: [], bookings: [], flags: [] };
-      saveCloudDebounced(); // Write initial empty state
+        var cloudDb = JSON.parse(rows[0].data);
+        // Merge cloud with any local changes (handles offline edits)
+        db = mergeDb(db, cloudDb);
+      } catch(e) { console.error('Parse error:', e); }
+    } else {
+      // No cloud data yet - initialise
+      ensureDbKeys();
+      saveCloudDebounced();
     }
-    if (!db.categories) db.categories = [];
-    if (!db.flags) db.flags = [];
-    saveLocal(); setSS('ok', 'Synced'); renderAll();
+    ensureDbKeys();
+    saveLocal();
+    setSS('ok', 'Synced');
+    renderAll();
+    // Auto-sync every 30 seconds to pick up other users' changes
+    if (!window._autoSyncTimer) {
+      window._autoSyncTimer = setInterval(function() {
+        if (!_saving && !_pendingSave) loadCloud();
+      }, 30000);
+    }
   })
   .catch(function(e) {
     console.error('Sync error:', e.message);
     setSS('err', 'Offline');
-    toast('⚠ Sync error: ' + e.message);
-    loadLocal(); renderAll();
+    loadLocal(); ensureDbKeys(); renderAll();
+    // Retry connection - clear any existing retry first
+    if (window._retryTimer) clearTimeout(window._retryTimer);
+    window._retryTimer = setTimeout(function() { window._retryTimer = null; loadCloud(); }, 10000);
   });
 }
 
@@ -477,47 +466,183 @@ function initCloud() {
 }
 
 function saveCloud() {
-  saveLocal();
+  if (_saving) { _pendingSave = true; return; } // Queue if already saving
+  _saving = true; _pendingSave = false;
   setSS('busy', 'Saving...');
-  // Use UPSERT (POST with Prefer: resolution=merge-duplicates)
-  // This always writes correctly whether row exists or not
-  fetch(SUPABASE_URL + '/rest/v1/equipdata', {
-    method: 'POST',
-    headers: {
-      'apikey': SUPABASE_KEY,
-      'Authorization': 'Bearer ' + SUPABASE_KEY,
-      'Content-Type': 'application/json',
-      'Prefer': 'resolution=merge-duplicates,return=minimal'
-    },
-    body: JSON.stringify({ id: 1, data: JSON.stringify(db) })
+  saveLocal();
+
+  // Step 1: Fetch current cloud state
+  fetch(SUPABASE_URL + '/rest/v1/equipdata?id=eq.1&select=data', {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY }
+  })
+  .then(function(r) { return r.ok ? r.json() : []; })
+  .then(function(rows) {
+    // Step 2: Merge cloud + local changes
+    var cloudDb = (rows && rows.length > 0 && rows[0].data) ? JSON.parse(rows[0].data) : {};
+    var merged = mergeDb(db, cloudDb);
+    db = merged;
+    saveLocal();
+
+    // Step 3: Write merged result
+    return fetch(SUPABASE_URL + '/rest/v1/equipdata', {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify({ id: 1, data: JSON.stringify(merged) })
+    });
   })
   .then(function(r) {
-    if (!r.ok) {
-      return r.text().then(function(body) {
-        throw new Error('HTTP ' + r.status + ': ' + body.slice(0,120));
-      });
-    }
+    if (!r.ok) return r.text().then(function(body) { throw new Error('HTTP ' + r.status + ': ' + body.slice(0,120)); });
+    _saving = false;
     setSS('ok', 'Saved ✓');
+    renderAll();
+    // If another save was queued while we were saving, do it now
+    if (_pendingSave) saveCloudDebounced();
   })
   .catch(function(e) {
+    _saving = false;
     setSS('err', 'Save failed');
-    // Show full error so we can diagnose
-    toast('⚠ ' + e.message.slice(0,80));
-    document.getElementById('sync-lbl').textContent = e.message.slice(0,30);
+    toast('⚠ Save failed: ' + e.message.slice(0,60));
     console.error('saveCloud error:', e.message);
+    // Retry once after 3 seconds
+    setTimeout(function() { if (_pendingSave) saveCloud(); }, 3000);
   });
 }
 
 function saveLocal() { try { localStorage.setItem('et-db', JSON.stringify(db)); } catch(e) {} }
+function loadLocal() { try { var d=localStorage.getItem('et-db'); if(d){db=JSON.parse(d); ensureDbKeys();} } catch(e) {} }
 
-var _saveTimer = null;
-function saveCloudDebounced() {
-  // Save local immediately, cloud after short delay to batch rapid changes
-  saveLocal();
-  if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(function() { saveCloud(); }, 300);
+function ensureDbKeys() {
+  if (!db.items) db.items=[];
+  if (!db.employees) db.employees=[];
+  if (!db.log) db.log=[];
+  if (!db.bookings) db.bookings=[];
+  if (!db.flags) db.flags=[];
+  if (!db.categories) db.categories=[];
+  if (!db.version) db.version=0;
 }
-function loadLocal() { try { var d = localStorage.getItem('et-db'); if (d) { db = JSON.parse(d); if (!db.items) db.items = []; if (!db.employees) db.employees = []; if (!db.log) db.log = []; if (!db.bookings) db.bookings = []; } } catch(e) {} }
+
+// ── Merge-based sync ───────────────────────────────────────────────────────
+// Merges cloud and local data so NO changes are ever lost
+function mergeDb(local, cloud) {
+  var merged = {};
+
+  // Items: union by id
+  // Use the LOG as the source of truth for item status - not the item record itself
+  // This means a return (log entry 'in') always wins over a stale cloud 'out' status
+  var itemMap = {};
+  (cloud.items||[]).forEach(function(i){ itemMap[i.id] = JSON.parse(JSON.stringify(i)); });
+  (local.items||[]).forEach(function(i){
+    if (!itemMap[i.id]) { itemMap[i.id] = JSON.parse(JSON.stringify(i)); }
+    else {
+      var c = itemMap[i.id];
+      // Merge all non-status fields from local (name, colour, category, type, totalQty etc)
+      Object.keys(i).forEach(function(k){
+        if (k !== 'status' && k !== 'employee' && k !== 'since' && k !== 'job' && k !== 'allocations') {
+          c[k] = i[k];
+        }
+      });
+      // For bulk items merge allocations
+      if (i.type==='bulk') {
+        var allocMap = {};
+        (c.allocations||[]).forEach(function(a){ allocMap[a.employee]=a.qty; });
+        (i.allocations||[]).forEach(function(a){ allocMap[a.employee]=a.qty; });
+        c.allocations = Object.keys(allocMap).filter(function(e){return allocMap[e]>0;}).map(function(e){return{employee:e,qty:allocMap[e]};});
+        c.totalQty = Math.max(i.totalQty||0, c.totalQty||0);
+      }
+    }
+  });
+
+  // Now replay the merged log to determine definitive item status
+  // The log is additive and never loses entries, so it is always correct
+  var allLog = [];
+  var logMap2 = {};
+  function logKey2(e){ return (e.time||'')+'|'+(e.itemId||'')+'|'+(e.action||'')+'|'+(e.employee||''); }
+  (cloud.log||[]).forEach(function(e){ logMap2[logKey2(e)]=e; });
+  (local.log||[]).forEach(function(e){ logMap2[logKey2(e)]=e; });
+  allLog = Object.values(logMap2).sort(function(a,b){return (a.time||'').localeCompare(b.time||'');});
+
+  // Apply log entries to get true current status per item
+  // Bulk items: rebuild allocations from scratch using log
+  var bulkAllocMap = {}; // itemId -> { employee -> qty }
+  allLog.forEach(function(entry){
+    var item = itemMap[entry.itemId];
+    if (!item) return;
+    if (entry.action === 'out') {
+      item.status = 'out'; item.employee = entry.employee; item.since = entry.time; item.job = entry.job||'—';
+    } else if (entry.action === 'in') {
+      item.status = 'in'; item.employee = null; item.since = null; item.job = null;
+    } else if (entry.action === 'transfer') {
+      item.status = 'out'; item.employee = entry.employee; item.since = entry.time;
+    } else if (entry.action === 'bulk-out' && entry.qty) {
+      if (!bulkAllocMap[entry.itemId]) bulkAllocMap[entry.itemId] = {};
+      bulkAllocMap[entry.itemId][entry.employee] = (bulkAllocMap[entry.itemId][entry.employee]||0) + (entry.qty||0);
+    } else if (entry.action === 'bulk-in' && entry.qty) {
+      if (!bulkAllocMap[entry.itemId]) bulkAllocMap[entry.itemId] = {};
+      bulkAllocMap[entry.itemId][entry.employee] = Math.max(0, (bulkAllocMap[entry.itemId][entry.employee]||0) - (entry.qty||0));
+    }
+  });
+  // Apply bulk allocations derived from log
+  Object.keys(bulkAllocMap).forEach(function(itemId) {
+    var item = itemMap[itemId];
+    if (!item || item.type !== 'bulk') return;
+    var allocMap = bulkAllocMap[itemId];
+    item.allocations = Object.keys(allocMap).filter(function(e){return allocMap[e]>0;}).map(function(e){return{employee:e,qty:allocMap[e]};});
+  });
+
+  merged.items = Object.values(itemMap);
+
+  // Employees: union by name
+  var empMap = {};
+  (cloud.employees||[]).forEach(function(e){ empMap[e.name]=e; });
+  (local.employees||[]).forEach(function(e){ if(!empMap[e.name]) empMap[e.name]=e; else Object.assign(empMap[e.name],e); });
+  merged.employees = Object.values(empMap).sort(function(a,b){return a.name.localeCompare(b.name);});
+
+  // Log: already built above as allLog (union of cloud + local, never loses entries)
+  merged.log = allLog;
+
+  // Bookings: union by id, prefer non-cancelled
+  var bkMap = {};
+  (cloud.bookings||[]).forEach(function(b){ bkMap[b.id]=b; });
+  (local.bookings||[]).forEach(function(b){
+    if (!bkMap[b.id]) bkMap[b.id]=b;
+    else if (b.status==='cancelled') bkMap[b.id].status='cancelled';
+  });
+  merged.bookings = Object.values(bkMap);
+
+  // Flags: union by id
+  var flagMap = {};
+  (cloud.flags||[]).forEach(function(f){ flagMap[f.id||f.time]=f; });
+  (local.flags||[]).forEach(function(f){ if(!flagMap[f.id||f.time]) flagMap[f.id||f.time]=f; else if(f.resolved) flagMap[f.id||f.time].resolved=true; });
+  merged.flags = Object.values(flagMap);
+
+  // Categories: union
+  var cats = {};
+  (cloud.categories||[]).forEach(function(c){ cats[c]=1; });
+  (local.categories||[]).forEach(function(c){ cats[c]=1; });
+  merged.categories = Object.keys(cats).sort();
+
+  // Increment version
+  merged.version = Math.max(cloud.version||0, local.version||0) + 1;
+
+  return merged;
+}
+
+var _saving = false;
+var _saveTimer = null;
+var _pendingSave = false;
+
+function saveCloudDebounced() {
+  saveLocal();
+  _pendingSave = true;
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(function() { saveCloud(); }, 400);
+}
+// loadLocal defined above with ensureDbKeys
 function syncNow() { loadCloud(); }
 
 // ─── Admin ─────────────────────────────────────────────────────────────────
@@ -669,7 +794,7 @@ function processCode(rawCode) {
     return;
   }
   if (item.status === 'in') {
-    if (!emp) { toast('⚠ Please select an employee first.'); return; return; }
+    if (!emp) { toast('⚠ Please select an employee first.'); return; }
     pendingAction = { type: 'out', item: item, emp: emp, job: '---' };
     document.getElementById('conf-title').textContent = 'Check out item';
     // Check if item has upcoming or current bookings
@@ -758,7 +883,7 @@ function showTransferModal(item, emp) {
 
 function confirmTransfer() {
   var item = window._transferItem, toEmp = document.getElementById('transfer-emp').value;
-  if (!toEmp) { toast('⚠ Please select an employee.'); return; return; }
+  if (!toEmp) { toast('⚠ Please select an employee.'); return; }
   pendingAction = { type: 'transfer', item: item, fromEmp: item.employee, toEmp: toEmp };
   closeModal('modal-transfer');
   document.getElementById('conf-title').textContent = 'Confirm transfer';
@@ -870,11 +995,11 @@ function addBooking() {
   var itemId=document.getElementById('bk-item').value,emp=document.getElementById('bk-emp').value;
   var from=document.getElementById('bk-from').value,to=document.getElementById('bk-to').value;
   var job=document.getElementById('bk-job').value.trim();
-  if(!itemId||!emp||!from||!to){toast('⚠ Please fill in all fields.'); return;return;}
+  if(!itemId||!emp||!from||!to){toast('⚠ Please fill in all fields.'); return;}
   // Check if selected employee has booking permission
   var empObj=db.employees.filter(function(e){return e.name===emp;})[0];
-  if(empObj && empObj.canBook===false && !IS_ADMIN){toast('⚠ No booking permission. Contact admin.'); return;return;}
-  if(from>to){toast('⚠ End date must be after start date.'); return;return;}
+  if(empObj && empObj.canBook===false && !IS_ADMIN){toast('⚠ No booking permission. Contact admin.'); return;}
+  if(from>to){toast('⚠ End date must be after start date.'); return;}
   var item=db.items.filter(function(i){return i.id===itemId;})[0];
   if(item.status==='out'){
     if(!confirm('⚠ '+item.name+' is currently checked out.\n\n👤 With: '+(item.employee||'?')+'\n🕐 Since: '+(item.since||'?')+'\n\nYou can still book future dates. Continue?')) return;
@@ -887,7 +1012,7 @@ function addBooking() {
 }
 
 function cancelBk(id) {
-  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
   if(!confirm('Delete this booking? This cannot be undone.')) return;
   var b=db.bookings.filter(function(x){return x.id===id;})[0]; if(b) b.status='cancelled';
   saveCloudDebounced(); renderCal(); renderBkList(); updateHdr(); toast('Booking cancelled');
@@ -939,17 +1064,17 @@ function setItemType(type) {
 }
 
 function addItem() {
-  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
   var name=document.getElementById('new-item-name').value.trim();
   var type=document.getElementById('new-item-type').value;
   var colour=getSelectedColour();
-  if(!name){toast('⚠ Enter item name.'); return;return;}
+  if(!name){toast('⚠ Enter item name.'); return;}
   if(type==='bulk') {
     var qty=parseInt(document.getElementById('new-item-qty').value)||1;
     var bulkCustomId = document.getElementById('new-bulk-id').value.trim();
     var id = bulkCustomId || ('BULK-'+name.replace(/[^a-zA-Z0-9]/g,'-').toUpperCase()+'-'+Date.now().toString().slice(-4));
     // Check for duplicate ID
-    if(db.items.some(function(x){return x.id.toLowerCase()===id.toLowerCase();})){toast('⚠ That Item ID already exists.'); return;return;}
+    if(db.items.some(function(x){return x.id.toLowerCase()===id.toLowerCase();})){toast('⚠ That Item ID already exists.'); return;}
     document.getElementById('new-bulk-id').value='';
     var cat=document.getElementById('new-item-cat').value;
     db.items.push({id:id,name:name,colour:colour,category:cat,type:'bulk',totalQty:qty,allocations:[],status:'in',employee:null,job:null,since:null});
@@ -959,7 +1084,7 @@ function addItem() {
   } else {
     var id=document.getElementById('new-item-id').value.trim();
     if(!id){alert('Enter item ID.');return;}
-    for(var i=0;i<db.items.length;i++){if(db.items[i].id===id){toast('⚠ That Item ID already exists.'); return;return;}}
+    for(var i=0;i<db.items.length;i++){if(db.items[i].id===id){toast('⚠ That Item ID already exists.'); return;}}
     var cat=document.getElementById('new-item-cat').value;
     db.items.push({id:id,name:name,colour:colour,category:cat,type:'single',status:'in',employee:null,job:null,since:null});
     document.getElementById('new-item-name').value='';
@@ -1089,7 +1214,9 @@ function renderItems() {
     for(var ci=0;ci<catItems.length;ci++){
       var item=catItems[ci].item, i=catItems[ci].i;
     var item=db.items[i],nb=null;
-    for(var j=0;j<db.bookings.length;j++){if(db.bookings[j].itemId===item.id&&db.bookings[j].status==='active'&&db.bookings[j].from>=t){nb=db.bookings[j];break;}}
+    var nbCandidates=db.bookings.filter(function(b){return b.itemId===item.id&&b.status==='active'&&b.to>=t;});
+    nbCandidates.sort(function(a,b){return a.from.localeCompare(b.from);});
+    if(nbCandidates.length) nb=nbCandidates[0];
     var bb=nb?'<span class="badge booked" style="margin-left:4px">Booked '+nb.from+'</span>':'';
     if(item.type==='bulk'){
       var allocs=item.allocations||[];
@@ -1131,7 +1258,7 @@ function renderItems() {
 }
 
 function delItem(idx) {
-  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
   var item=db.items[parseInt(idx)]; if(!item) return;
   var pw=prompt('Enter admin password to delete this item:');
   if(!pw||pw!==ADMIN_PASSWORD){alert('Incorrect password.');return;}
@@ -1147,9 +1274,9 @@ function delItem(idx) {
 
 // ─── Staff ─────────────────────────────────────────────────────────────────
 function addEmp() {
-  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
   var name=document.getElementById('new-emp').value.trim(); if(!name) return;
-  for(var i=0;i<db.employees.length;i++){if(db.employees[i].name.toLowerCase()===name.toLowerCase()){toast('⚠ Employee already exists.'); return;return;}}
+  for(var i=0;i<db.employees.length;i++){if(db.employees[i].name.toLowerCase()===name.toLowerCase()){toast('⚠ Employee already exists.'); return;}}
   var canBook = document.getElementById('new-emp-can-book').value === 'true';
   db.employees.push({name:name, canBook:canBook}); 
   db.employees.sort(function(a,b){return a.name.localeCompare(b.name);});
@@ -1180,7 +1307,7 @@ function renderEmps() {
 }
 
 function delEmp(idx) {
-  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
   var emp=db.employees[parseInt(idx)]; if(!emp) return;
   var pw=prompt('Enter admin password to remove this employee:');
   if(!pw||pw!==ADMIN_PASSWORD){alert('Incorrect password.');return;}
@@ -1250,7 +1377,7 @@ function renderLog() {
 }
 
 function clearLog() {
-  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;return;}
+  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
   if(!confirm('Clear all log entries?')) return;
   db.log=[]; saveCloudDebounced(); renderLog(); toast('Log cleared');
 }
@@ -1529,7 +1656,7 @@ function saveEmpEdit() {
   var emp = db.employees[idx]; if (!emp) return;
   var newName = document.getElementById('edit-emp-name').value.trim();
   var canBook = document.getElementById('edit-emp-can-book').value === 'true';
-  if (!newName) { toast('⚠ Name cannot be empty.'); return; return; }
+  if (!newName) { toast('⚠ Name cannot be empty.'); return; }
   var oldName = emp.name;
   emp.name = newName;
   emp.canBook = canBook;
@@ -1601,8 +1728,8 @@ function submitNoQR() {
   var name = document.getElementById('noqr-name').value.trim();
   var emp = document.getElementById('noqr-emp').value;
   var notes = document.getElementById('noqr-notes').value.trim();
-  if (!name) { toast('⚠ Please enter a description.'); return; return; }
-  if (!emp) { toast('⚠ Please select your name.'); return; return; }
+  if (!name) { toast('⚠ Please enter a description.'); return; }
+  if (!emp) { toast('⚠ Please select your name.'); return; }
   var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
   if (!db.flags) db.flags = [];
   (db.flags||(db.flags=[])) && db.flags.push({ id: Date.now().toString(), code: '', description: name, notes: notes, reportedBy: emp, time: now, resolved: false });
