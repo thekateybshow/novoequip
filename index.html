@@ -423,9 +423,12 @@ function loadCloud() {
     if (rows && rows.length > 0 && rows[0].data) {
       try {
         var cloudDb = JSON.parse(rows[0].data);
-        // Merge cloud with any local changes (handles offline edits)
         db = mergeDb(db, cloudDb);
-      } catch(e) { console.error('Parse error:', e); }
+      } catch(parseErr) {
+        console.error('Cloud data corrupt on load:', parseErr);
+        toast('⚠ Cloud data error — using local data');
+        // Keep local db, don't overwrite with corrupt data
+      }
     } else {
       // No cloud data yet - initialise
       ensureDbKeys();
@@ -478,7 +481,10 @@ function saveCloud() {
   .then(function(r) { return r.ok ? r.json() : []; })
   .then(function(rows) {
     // Step 2: Merge cloud + local changes
-    var cloudDb = (rows && rows.length > 0 && rows[0].data) ? JSON.parse(rows[0].data) : {};
+    var cloudDb = {};
+    try {
+      if (rows && rows.length > 0 && rows[0].data) cloudDb = JSON.parse(rows[0].data);
+    } catch(parseErr) { console.error('Cloud data corrupt, using local:', parseErr); cloudDb = {}; }
     var merged = mergeDb(db, cloudDb);
     db = merged;
     saveLocal();
@@ -561,10 +567,10 @@ function mergeDb(local, cloud) {
   // The log is additive and never loses entries, so it is always correct
   var allLog = [];
   var logMap2 = {};
-  function logKey2(e){ return (e.time||'')+'|'+(e.itemId||'')+'|'+(e.action||'')+'|'+(e.employee||''); }
+  function logKey2(e){ return (e.isoTime||e.time||'')+'|'+(e.itemId||'')+'|'+(e.action||'')+'|'+(e.employee||''); }
   (cloud.log||[]).forEach(function(e){ logMap2[logKey2(e)]=e; });
   (local.log||[]).forEach(function(e){ logMap2[logKey2(e)]=e; });
-  allLog = Object.values(logMap2).sort(function(a,b){return (a.time||'').localeCompare(b.time||'');});
+  allLog = Object.values(logMap2).sort(function(a,b){ var ta=a.isoTime||a.time||''; var tb=b.isoTime||b.time||''; return ta.localeCompare(tb); });
 
   // Apply log entries to get true current status per item
   // Bulk items: rebuild allocations from scratch using log
@@ -751,7 +757,12 @@ function startScan() {
   var s = document.createElement('script');
   s.src = 'https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js';
   s.onload = startZXing;
-  s.onerror = function() { alert('Could not load scanner. Use manual entry below.'); stopScan(); };
+  s.onerror = function() { toast('⚠ Scanner could not load — use manual entry below.'); stopScan(); };
+  // Timeout if script hangs
+  var zxingTimeout = setTimeout(function() {
+    if (!window.ZXing) { toast('⚠ Scanner timed out — use manual entry.'); stopScan(); }
+  }, 8000);
+  s.onload = function() { clearTimeout(zxingTimeout); startZXing(); };
   document.head.appendChild(s);
 }
 
@@ -835,7 +846,7 @@ document.getElementById('conf-btn').onclick = function() {
     this.disabled = true;
     var self = this;
     setTimeout(function(){ self.disabled = false; }, 2000);
-    var now = new Date().toLocaleString('en-AU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+    var nowDate = new Date(); var now = nowDate.toLocaleString('en-AU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', timeZone:'Australia/Sydney' }); var isoNow = nowDate.toISOString();
     // Always look up item fresh from db by id to avoid stale reference
     var itemId = pendingAction.item ? pendingAction.item.id : null;
     var item = itemId ? db.items.filter(function(x){return x.id===itemId;})[0] : null;
@@ -846,20 +857,20 @@ document.getElementById('conf-btn').onclick = function() {
     if (pendingAction.type === 'out') {
       var emp = pendingAction.emp;
       item.status = 'out'; item.employee = emp; item.job = '—'; item.since = now;
-      db.log.push({ action:'out', itemId:item.id, itemName:item.name, employee:emp, job:'—', time:now });
+      db.log.push({ action:'out', itemId:item.id, itemName:item.name, employee:emp, job:'—', time:now, isoTime:isoNow });
       showScanResult('<div class="card" style="border-color:#e0b0b0"><div style="font-weight:700;color:#c0392b">↑ Checked out</div><div class="isub">' + esc(item.name) + ' → ' + esc(emp) + '</div></div>');
       toast('Checked out ✓');
     } else if (pendingAction.type === 'transfer') {
       var fromEmp = pendingAction.fromEmp, toEmp = pendingAction.toEmp;
       if (!item) item = pendingAction.item;
-      db.log.push({ action:'transfer', itemId:item.id, itemName:item.name, employee:toEmp, fromEmployee:fromEmp, job:item.job||'—', time:now });
+      db.log.push({ action:'transfer', itemId:item.id, itemName:item.name, employee:toEmp, fromEmployee:fromEmp, job:item.job||'—', time:now, isoTime:isoNow });
       item.employee = toEmp; item.since = now;
       showScanResult('<div class="card" style="border-color:#b0b8e0"><div style="font-weight:700;color:#2c3e9e">⇄ Transferred</div><div class="isub">' + esc(item.name) + ': ' + esc(fromEmp) + ' → ' + esc(toEmp) + '</div></div>');
       toast('Transferred ✓');
     } else {
       var logEmployee = item.employee || (pendingAction.item ? pendingAction.item.employee : '');
       var logJob = item.job || (pendingAction.item ? pendingAction.item.job : '');
-      db.log.push({ action:'in', itemId:item.id, itemName:item.name, employee:logEmployee, job:logJob, time:now });
+      db.log.push({ action:'in', itemId:item.id, itemName:item.name, employee:logEmployee, job:logJob, time:now, isoTime:isoNow });
       item.status = 'in'; item.employee = null; item.job = null; item.since = null;
       showScanResult('<div class="card" style="border-color:#b0d8b0"><div style="font-weight:700;color:#27ae60">↓ Returned</div><div class="isub">' + esc(item.name) + ' back in storage</div></div>');
       toast('Returned ✓');
@@ -1002,11 +1013,12 @@ function addBooking() {
   if(from>to){toast('⚠ End date must be after start date.'); return;}
   var item=db.items.filter(function(i){return i.id===itemId;})[0];
   if(item.status==='out'){
-    if(!confirm('⚠ '+item.name+' is currently checked out.\n\n👤 With: '+(item.employee||'?')+'\n🕐 Since: '+(item.since||'?')+'\n\nYou can still book future dates. Continue?')) return;
+    // Show warning but don't block - worker can still book future dates
+    toast('⚠ Note: '+item.name+' is currently out with '+(item.employee||'?'));
   }
   var clash=db.bookings.filter(function(b){return b.itemId===itemId&&b.status==='active'&&b.from<=to&&b.to>=from;})[0];
   if(clash){alert('❌ Booking conflict!\n\n'+item.name+' is already booked by '+clash.employee+'\nFrom: '+clash.from+' to '+clash.to+'\n\nPlease choose different dates.');return;}
-  db.bookings.push({id:Date.now().toString(),itemId:itemId,itemName:item.name,employee:emp,from:from,to:to,job:job||'—',status:'active',created:new Date().toLocaleString('en-AU')});
+  db.bookings.push({id:Date.now().toString(),itemId:itemId,itemName:item.name,employee:emp,from:from,to:to,job:job||'—',status:'active',created:new Date().toLocaleString('en-AU', { timeZone:'Australia/Sydney' })});
   document.getElementById('bk-job').value='';
   saveCloudDebounced(); renderCal(); renderBkList(); updateHdr(); toast('Booking created ✓');
 }
@@ -1020,7 +1032,7 @@ function cancelBk(id) {
 
 function renderBkList() {
   var el=document.getElementById('bk-list'); if(!el) return;
-  var t=todayStr(),active=db.bookings.filter(function(b){return b.status==='active'&&b.to>=t;}).sort(function(a,b){return a.from.localeCompare(b.from);});
+  var t=todayStr(),active=db.bookings.filter(function(b){return b.status==='active'&&b.to>=t;}).sort(function(a,b){return a.from.localeCompare(b.from);}); // soonest first
   if(!active.length){el.innerHTML='<div class="empty">No upcoming bookings.</div>';return;}
   el.innerHTML=active.map(function(b){return'<div class="brow"><div class="row-between"><div><span style="font-weight:700">'+esc(b.itemName)+'</span><span class="badge booked" style="margin-left:8px">Booked</span></div><button class="btn danger sm" onclick="cancelBk(\''+b.id+'\')">✕</button></div><div style="font-size:12px;color:#888;margin-top:4px">👤 '+esc(b.employee)+' &nbsp; 💼 '+esc(b.job)+' &nbsp; 📅 '+b.from+' → '+b.to+'</div></div>';}).join('');
 }
@@ -1368,7 +1380,11 @@ function renderLog() {
     renderEmpEquipment();
   }
   if(!db.log.length){el.innerHTML='<div class="empty">No activity yet.</div>';return;}
-  el.innerHTML=db.log.slice().reverse().map(function(e){
+  var sortedLog = db.log.slice().sort(function(a,b){
+    var ta=a.isoTime||a.time||''; var tb=b.isoTime||b.time||'';
+    return tb.localeCompare(ta); // newest first
+  });
+  el.innerHTML=sortedLog.map(function(e){
     var badgeClass=e.action==='out'?'out':e.action==='transfer'?'transfer':e.action==='bulk-out'?'out':e.action==='bulk-in'?'in':'in';
     var badgeLabel=e.action==='out'?'↑ Checked out':e.action==='transfer'?'⇄ Transferred':e.action==='bulk-out'?'↑ Took out ('+e.qty+')':e.action==='bulk-in'?'↓ Returned ('+e.qty+')':'↓ Returned';
     var detail=e.action==='out'?esc(e.employee):e.action==='transfer'?esc(e.fromEmployee)+' → '+esc(e.employee):esc(e.employee);
@@ -1592,8 +1608,8 @@ function confirmBulkOut() {
   if (existing) existing.qty += qty;
   else allocs.push({employee:emp, qty:qty});
   item.allocations = allocs;
-  var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
-  db.log.push({action:'bulk-out',itemId:item.id,itemName:item.name,employee:emp,qty:qty,time:now});
+  var nowB = new Date(); var now = nowB.toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Australia/Sydney'});
+  db.log.push({action:'bulk-out',itemId:item.id,itemName:item.name,employee:emp,qty:qty,time:now,isoTime:nowB.toISOString()});
   saveCloudDebounced(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' checked out to ' + emp + ' ✓');
 }
 
@@ -1610,8 +1626,8 @@ function confirmBulkIn() {
   }
   existing.qty -= qty;
   if (existing.qty === 0) item.allocations = allocs.filter(function(a){return a.employee!==emp;});
-  var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
-  db.log.push({action:'bulk-in',itemId:item.id,itemName:item.name,employee:emp,qty:qty,time:now});
+  var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Australia/Sydney'});
+  db.log.push({action:'bulk-in',itemId:item.id,itemName:item.name,employee:emp,qty:qty,time:now,isoTime:nowB.toISOString()});
   saveCloudDebounced(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' returned from ' + emp + ' ✓');
 }
 
@@ -1730,7 +1746,7 @@ function submitNoQR() {
   var notes = document.getElementById('noqr-notes').value.trim();
   if (!name) { toast('⚠ Please enter a description.'); return; }
   if (!emp) { toast('⚠ Please select your name.'); return; }
-  var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  var now = new Date().toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Australia/Sydney'});
   if (!db.flags) db.flags = [];
   (db.flags||(db.flags=[])) && db.flags.push({ id: Date.now().toString(), code: '', description: name, notes: notes, reportedBy: emp, time: now, resolved: false });
   saveCloudDebounced();
@@ -1743,7 +1759,10 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 function showItemLog(idx) {
   var item = db.items[parseInt(idx)]; if (!item) return;
   document.getElementById('item-log-title').textContent = item.name + ' — History';
-  var entries = db.log.filter(function(e) { return e.itemId === item.id; }).slice().reverse();
+  var entries = db.log.filter(function(e) { return e.itemId === item.id; }).slice().sort(function(a,b){
+    var ta=a.isoTime||a.time||''; var tb=b.isoTime||b.time||'';
+    return tb.localeCompare(ta); // newest first
+  });
   if (!entries.length) {
     document.getElementById('item-log-body').innerHTML = '<div class="empty">No history for this item yet.</div>';
   } else {
@@ -1761,7 +1780,13 @@ document.getElementById('new-emp').addEventListener('keydown',function(e){if(e.k
 document.getElementById('manual-code').addEventListener('keydown',function(e){if(e.key==='Enter')processCode(e.target.value.trim());});
 
 // ─── Boot ──────────────────────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded', function() { loadCloud(); });
+window.addEventListener('DOMContentLoaded', function() {
+  // Startup: load from local immediately for fast render, then sync cloud
+  loadLocal();
+  ensureDbKeys();
+  renderAll();
+  loadCloud();
+});
 </script>
 <!-- EDIT EMPLOYEE MODAL -->
 <div class="modal-bg" id="modal-edit-emp">
