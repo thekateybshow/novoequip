@@ -530,6 +530,13 @@ function ensureDbKeys() {
   if (!db.flags) db.flags=[];
   if (!db.categories) db.categories=[];
   if (!db.version) db.version=0;
+  // Migrate old log entries: add isoTime if missing so sorting always works
+  db.log.forEach(function(e) {
+    if (!e.isoTime) {
+      var ts = logTs(e);
+      if (ts) e.isoTime = new Date(ts).toISOString();
+    }
+  });
 }
 
 // ── Log timestamp helper ───────────────────────────────────────────────────
@@ -580,9 +587,13 @@ function mergeDb(local, cloud) {
   // The log is additive and never loses entries, so it is always correct
   var allLog = [];
   var logMap2 = {};
-  function logKey2(e){ return (e.isoTime||e.time||'')+'|'+(e.itemId||'')+'|'+(e.action||'')+'|'+(e.employee||''); }
+  function logKey2(e){ return (e.time||'')+'|'+(e.itemId||'')+'|'+(e.action||'')+'|'+(e.employee||''); }
   (cloud.log||[]).forEach(function(e){ logMap2[logKey2(e)]=e; });
   (local.log||[]).forEach(function(e){ logMap2[logKey2(e)]=e; });
+  // Backfill isoTime on any entry that doesn't have it yet
+  Object.values(logMap2).forEach(function(e) {
+    if (!e.isoTime) { var ts = logTs(e); if (ts) e.isoTime = new Date(ts).toISOString(); }
+  });
   allLog = Object.values(logMap2).sort(function(a,b){ return logTs(a) - logTs(b); }); // real dates, oldest first
 
   // Apply log entries to get true current status per item
