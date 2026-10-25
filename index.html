@@ -226,8 +226,17 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
         <div class="row"><input type="text" id="new-item-id" placeholder="e.g. TOOL-001"><button class="btn sm" onclick="autoId()">Auto</button></div>
       </div>
       <div class="field" id="item-qty-field" style="display:none">
-        <label>Total quantity in stock</label>
-        <input type="number" id="new-item-qty" placeholder="e.g. 20" min="1" value="1">
+        <label>Quantity at each shed</label>
+        <div class="g2">
+          <div>
+            <label style="font-size:11px;color:#888;margin-bottom:4px;display:block">🏭 Workshop</label>
+            <input type="number" id="new-item-qty-workshop" placeholder="0" min="0" value="0">
+          </div>
+          <div>
+            <label style="font-size:11px;color:#888;margin-bottom:4px;display:block">🏚 Berro Shed</label>
+            <input type="number" id="new-item-qty-berro" placeholder="0" min="0" value="0">
+          </div>
+        </div>
       </div>
       <div class="field" id="item-bulk-id-field" style="display:none">
         <label>Item ID / QR code</label>
@@ -235,6 +244,13 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
           <input type="text" id="new-bulk-id" placeholder="e.g. BOLLARDS-01">
           <button class="btn sm" onclick="autoBulkId()">Auto</button>
         </div>
+      </div>
+      <div class="field" id="new-item-shed-wrap">
+        <label>Storage location</label>
+        <select id="new-item-shed">
+          <option value="Workshop">Workshop</option>
+          <option value="Berro Shed">Berro Shed</option>
+        </select>
       </div>
       <div class="field">
         <label>Colour (for calendar)</label>
@@ -369,6 +385,20 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
       <select id="transfer-emp"><option value="">Select employee...</option></select>
     </div>
     <button class="btn primary full" onclick="confirmTransfer()" style="margin-bottom:8px">⇄ Transfer to selected employee</button>
+    <div class="field" id="return-shed-field" style="margin-bottom:8px">
+      <label style="font-size:12px;font-weight:700;color:#555;margin-bottom:5px;display:block">Return to which shed?</label>
+      <div style="display:flex;gap:8px">
+        <button type="button" id="shed-workshop-btn" onclick="selectReturnShed('Workshop')"
+          style="flex:1;padding:10px 8px;border-radius:8px;border:2px solid #1a1a1a;background:#1a1a1a;color:#fff;font-family:Arial,sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-align:center">
+          🏭 Workshop
+        </button>
+        <button type="button" id="shed-berro-btn" onclick="selectReturnShed('Berro Shed')"
+          style="flex:1;padding:10px 8px;border-radius:8px;border:2px solid #ddd;background:#fff;color:#888;font-family:Arial,sans-serif;font-size:13px;font-weight:700;cursor:pointer;text-align:center">
+          🏚 Berro Shed
+        </button>
+      </div>
+      <input type="hidden" id="return-shed-value" value="Workshop">
+    </div>
     <button class="btn full" onclick="confirmReturn()" style="margin-bottom:8px;color:#27ae60;border-color:#b0d8b0">↓ Return to storage</button>
     <button class="btn full" onclick="closeModal('modal-transfer')" style="color:#aaa;border-color:#eee;font-size:12px">Cancel</button>
   </div>
@@ -429,11 +459,12 @@ function loadCloud() {
         toast('⚠ Cloud data error — using local data');
         // Keep local db, don't overwrite with corrupt data
       }
-    } else {
-      // No cloud data yet - initialise
+    } else if (db.items.length === 0 && db.employees.length === 0) {
+      // Only initialise if we genuinely have nothing local either
       ensureDbKeys();
       saveCloudDebounced();
     }
+    // If cloud is empty but we have local data, keep local - don't wipe it
     ensureDbKeys();
     saveLocal();
     setSS('ok', 'Synced');
@@ -530,12 +561,9 @@ function ensureDbKeys() {
   if (!db.flags) db.flags=[];
   if (!db.categories) db.categories=[];
   if (!db.version) db.version=0;
-  // Migrate old log entries: add isoTime if missing so sorting always works
+  // Migrate old log entries: add isoTime if missing
   db.log.forEach(function(e) {
-    if (!e.isoTime) {
-      var ts = logTs(e);
-      if (ts) e.isoTime = new Date(ts).toISOString();
-    }
+    if (!e.isoTime) { var ts = logTs(e); if (ts) e.isoTime = new Date(ts).toISOString(); }
   });
 }
 
@@ -574,10 +602,15 @@ function mergeDb(local, cloud) {
       });
       // For bulk items merge allocations
       if (i.type==='bulk') {
+        // Merge allocations by employee+shed key
         var allocMap = {};
-        (c.allocations||[]).forEach(function(a){ allocMap[a.employee]=a.qty; });
-        (i.allocations||[]).forEach(function(a){ allocMap[a.employee]=a.qty; });
-        c.allocations = Object.keys(allocMap).filter(function(e){return allocMap[e]>0;}).map(function(e){return{employee:e,qty:allocMap[e]};});
+        function allocKey(a){return (a.employee||'')+'|'+(a.shed||'');}
+        (c.allocations||[]).forEach(function(a){ allocMap[allocKey(a)]=JSON.parse(JSON.stringify(a)); });
+        (i.allocations||[]).forEach(function(a){ allocMap[allocKey(a)]=JSON.parse(JSON.stringify(a)); });
+        c.allocations = Object.values(allocMap).filter(function(a){return a.qty>0;});
+        // Merge shedQty
+        var csq = c.shedQty||{}; var isq = i.shedQty||{};
+        c.shedQty = {Workshop: Math.max(csq['Workshop']||0, isq['Workshop']||0), 'Berro Shed': Math.max(csq['Berro Shed']||0, isq['Berro Shed']||0)};
         c.totalQty = Math.max(i.totalQty||0, c.totalQty||0);
       }
     }
@@ -590,7 +623,6 @@ function mergeDb(local, cloud) {
   function logKey2(e){ return (e.time||'')+'|'+(e.itemId||'')+'|'+(e.action||'')+'|'+(e.employee||''); }
   (cloud.log||[]).forEach(function(e){ logMap2[logKey2(e)]=e; });
   (local.log||[]).forEach(function(e){ logMap2[logKey2(e)]=e; });
-  // Backfill isoTime on any entry that doesn't have it yet
   Object.values(logMap2).forEach(function(e) {
     if (!e.isoTime) { var ts = logTs(e); if (ts) e.isoTime = new Date(ts).toISOString(); }
   });
@@ -606,22 +638,30 @@ function mergeDb(local, cloud) {
       item.status = 'out'; item.employee = entry.employee; item.since = entry.time; item.job = entry.job||'—';
     } else if (entry.action === 'in') {
       item.status = 'in'; item.employee = null; item.since = null; item.job = null;
+      if (entry.shed) item.shed = entry.shed;
     } else if (entry.action === 'transfer') {
       item.status = 'out'; item.employee = entry.employee; item.since = entry.time;
     } else if (entry.action === 'bulk-out' && entry.qty) {
       if (!bulkAllocMap[entry.itemId]) bulkAllocMap[entry.itemId] = {};
-      bulkAllocMap[entry.itemId][entry.employee] = (bulkAllocMap[entry.itemId][entry.employee]||0) + (entry.qty||0);
+      var bKey = (entry.employee||'')+'|'+(entry.shed||'');
+      if (!bulkAllocMap[entry.itemId][bKey]) bulkAllocMap[entry.itemId][bKey] = {employee:entry.employee, shed:entry.shed||'', qty:0};
+      bulkAllocMap[entry.itemId][bKey].qty += (entry.qty||0);
     } else if (entry.action === 'bulk-in' && entry.qty) {
       if (!bulkAllocMap[entry.itemId]) bulkAllocMap[entry.itemId] = {};
-      bulkAllocMap[entry.itemId][entry.employee] = Math.max(0, (bulkAllocMap[entry.itemId][entry.employee]||0) - (entry.qty||0));
+      // Reduce from employee's total across all sheds
+      var empTotal = Object.values(bulkAllocMap[entry.itemId]).filter(function(a){return a.employee===entry.employee;}).reduce(function(s,a){return s+a.qty;},0);
+      var toReduce = Math.min(entry.qty||0, empTotal);
+      Object.values(bulkAllocMap[entry.itemId]).filter(function(a){return a.employee===entry.employee;}).forEach(function(a){
+        if (toReduce <= 0) return;
+        var d = Math.min(a.qty, toReduce); a.qty -= d; toReduce -= d;
+      });
     }
   });
   // Apply bulk allocations derived from log
   Object.keys(bulkAllocMap).forEach(function(itemId) {
     var item = itemMap[itemId];
     if (!item || item.type !== 'bulk') return;
-    var allocMap = bulkAllocMap[itemId];
-    item.allocations = Object.keys(allocMap).filter(function(e){return allocMap[e]>0;}).map(function(e){return{employee:e,qty:allocMap[e]};});
+    item.allocations = Object.values(bulkAllocMap[itemId]).filter(function(a){return a.qty>0;});
   });
 
   merged.items = Object.values(itemMap);
@@ -894,8 +934,9 @@ document.getElementById('conf-btn').onclick = function() {
     } else {
       var logEmployee = item.employee || (pendingAction.item ? pendingAction.item.employee : '');
       var logJob = item.job || (pendingAction.item ? pendingAction.item.job : '');
-      db.log.push({ action:'in', itemId:item.id, itemName:item.name, employee:logEmployee, job:logJob, time:now, isoTime:isoNow });
-      item.status = 'in'; item.employee = null; item.job = null; item.since = null;
+      var returnShed = pendingAction.shed || item.shed || 'Workshop';
+      db.log.push({ action:'in', itemId:item.id, itemName:item.name, employee:logEmployee, job:logJob, shed:returnShed, time:now, isoTime:isoNow });
+      item.status = 'in'; item.employee = null; item.job = null; item.since = null; item.shed = returnShed;
       showScanResult('<div class="card" style="border-color:#b0d8b0"><div style="font-weight:700;color:#27ae60">↓ Returned</div><div class="isub">' + esc(item.name) + ' back in storage</div></div>');
       toast('Returned ✓');
     }
@@ -913,6 +954,8 @@ function showTransferModal(item, emp) {
   sel.innerHTML = '<option value="">Select employee...</option>';
   db.employees.forEach(function(e) { if (e.name !== item.employee) { var o = document.createElement('option'); o.value = e.name; o.textContent = e.name; if (e.name === emp) o.selected = true; sel.appendChild(o); } });
   window._transferItem = item;
+  // Reset shed selector to Workshop default
+  selectReturnShed('Workshop');
   document.getElementById('modal-transfer').classList.add('open');
 }
 
@@ -927,10 +970,24 @@ function confirmTransfer() {
   document.getElementById('modal-confirm').classList.add('open');
 }
 
+function selectReturnShed(shed) {
+  document.getElementById('return-shed-value').value = shed;
+  var wb = document.getElementById('shed-workshop-btn');
+  var bb = document.getElementById('shed-berro-btn');
+  if (shed === 'Workshop') {
+    wb.style.background='#1a1a1a'; wb.style.color='#fff'; wb.style.borderColor='#1a1a1a';
+    bb.style.background='#fff'; bb.style.color='#888'; bb.style.borderColor='#ddd';
+  } else {
+    bb.style.background='#1a1a1a'; bb.style.color='#fff'; bb.style.borderColor='#1a1a1a';
+    wb.style.background='#fff'; wb.style.color='#888'; wb.style.borderColor='#ddd';
+  }
+}
+
 function confirmReturn() {
   var item = window._transferItem;
   if (!item) { toast('⚠ No item selected. Please scan again.'); closeModal('modal-transfer'); return; }
-  pendingAction = { type: 'in', item: item };
+  var shed = document.getElementById('return-shed-value').value || 'Workshop';
+  pendingAction = { type: 'in', item: item, shed: shed };
   closeModal('modal-transfer');
   document.getElementById('conf-title').textContent = 'Return item';
   document.getElementById('conf-body').innerHTML = 'Return <strong>' + esc(item.name) + '</strong> to storage?<br><small style="color:#aaa">Currently with ' + esc(item.employee) + '</small>';
@@ -1013,17 +1070,30 @@ function showDay(ds) {
 // ─── Bookings ──────────────────────────────────────────────────────────────
 function renderBkForm() {
   var bi=document.getElementById('bk-item'),be=document.getElementById('bk-emp'); if(!bi||!be) return;
+  // Preserve current selections before rebuilding
+  var curItem=bi.value, curEmp=be.value;
+  var curFrom=document.getElementById('bk-from').value;
+  var curTo=document.getElementById('bk-to').value;
+  var curJob=document.getElementById('bk-job')?document.getElementById('bk-job').value:'';
   bi.innerHTML='<option value="">Select...</option>';
-  db.items.forEach(function(i){var status=i.status==='out'?' ⚠ OUT – '+(i.employee||'?'):' ✓ Available'; bi.innerHTML+='<option value="'+esc(i.id)+'">'+esc(i.name)+' ('+esc(i.id)+')'+status+'</option>';});
+  db.items.forEach(function(i){
+    var status=i.status==='out'?' ⚠ OUT – '+(i.employee||'?'):' ✓ Available';
+    var opt='<option value="'+esc(i.id)+'"'+(i.id===curItem?' selected':'')+'>'+esc(i.name)+' ('+esc(i.id)+')'+status+'</option>';
+    bi.innerHTML+=opt;
+  });
   be.innerHTML='<option value="">Select...</option>';
   db.employees.forEach(function(e){
     var canBook = e.canBook !== false;
-    // Only show employees with booking permission (admin sees all)
     if (!canBook && !IS_ADMIN) return;
     var label = esc(e.name) + (IS_ADMIN && !canBook ? ' (no booking access)' : '');
-    be.innerHTML+='<option value="'+esc(e.name)+'">'+label+'</option>';
+    be.innerHTML+='<option value="'+esc(e.name)+'"'+(e.name===curEmp?' selected':'')+'>'+label+'</option>';
   });
-  document.getElementById('bk-from').value=todayStr(); document.getElementById('bk-to').value=todayStr();
+  // Only set date defaults if fields are empty
+  if (!curFrom) document.getElementById('bk-from').value=todayStr();
+  if (!curTo) document.getElementById('bk-to').value=todayStr();
+  // Restore job number
+  var jobEl=document.getElementById('bk-job');
+  if(jobEl && curJob) jobEl.value=curJob;
 }
 
 function addBooking() {
@@ -1043,6 +1113,11 @@ function addBooking() {
   var clash=db.bookings.filter(function(b){return b.itemId===itemId&&b.status==='active'&&b.from<=to&&b.to>=from;})[0];
   if(clash){alert('❌ Booking conflict!\n\n'+item.name+' is already booked by '+clash.employee+'\nFrom: '+clash.from+' to '+clash.to+'\n\nPlease choose different dates.');return;}
   db.bookings.push({id:Date.now().toString(),itemId:itemId,itemName:item.name,employee:emp,from:from,to:to,job:job||'—',status:'active',created:new Date().toLocaleString('en-AU', { timeZone:'Australia/Sydney' })});
+  // Clear form after successful booking
+  document.getElementById('bk-item').value='';
+  document.getElementById('bk-emp').value='';
+  document.getElementById('bk-from').value=todayStr();
+  document.getElementById('bk-to').value=todayStr();
   document.getElementById('bk-job').value='';
   saveCloudDebounced(); renderCal(); renderBkList(); updateHdr(); toast('Booking created ✓');
 }
@@ -1090,12 +1165,16 @@ function setItemType(type) {
     idField.style.display='block'; qtyField.style.display='none';
     var bulkIdField=document.getElementById('item-bulk-id-field');
     if(bulkIdField) bulkIdField.style.display='none';
+    var shedField=document.getElementById('new-item-shed-wrap');
+    if(shedField) shedField.style.display='block';
   } else {
     bb.style.background='#1a1a1a'; bb.style.color='#fff'; bb.style.borderColor='#1a1a1a';
     sb.style.background='#fff'; sb.style.color='#888'; sb.style.borderColor='#ddd';
     idField.style.display='none'; qtyField.style.display='block';
     var bulkIdField=document.getElementById('item-bulk-id-field');
     if(bulkIdField) bulkIdField.style.display='block';
+    var shedField=document.getElementById('new-item-shed-wrap');
+    if(shedField) shedField.style.display='none';
   }
 }
 
@@ -1113,16 +1192,24 @@ function addItem() {
     if(db.items.some(function(x){return x.id.toLowerCase()===id.toLowerCase();})){toast('⚠ That Item ID already exists.'); return;}
     document.getElementById('new-bulk-id').value='';
     var cat=document.getElementById('new-item-cat').value;
-    db.items.push({id:id,name:name,colour:colour,category:cat,type:'bulk',totalQty:qty,allocations:[],status:'in',employee:null,job:null,since:null});
+    var qtyWorkshop=parseInt(document.getElementById('new-item-qty-workshop').value)||0;
+    var qtyBerro=parseInt(document.getElementById('new-item-qty-berro').value)||0;
+    var totalQty=qtyWorkshop+qtyBerro;
+    if(totalQty<1){toast('⚠ Enter at least 1 item at one shed.'); return;}
+    db.items.push({id:id,name:name,colour:colour,category:cat,type:'bulk',
+      shedQty:{Workshop:qtyWorkshop,'Berro Shed':qtyBerro},
+      totalQty:totalQty,allocations:[],status:'in',employee:null,job:null,since:null});
     document.getElementById('new-item-name').value='';
-    document.getElementById('new-item-qty').value='1';
+    document.getElementById('new-item-qty-workshop').value='0';
+    document.getElementById('new-item-qty-berro').value='0';
     setItemType('single');
   } else {
     var id=document.getElementById('new-item-id').value.trim();
     if(!id){alert('Enter item ID.');return;}
     for(var i=0;i<db.items.length;i++){if(db.items[i].id===id){toast('⚠ That Item ID already exists.'); return;}}
     var cat=document.getElementById('new-item-cat').value;
-    db.items.push({id:id,name:name,colour:colour,category:cat,type:'single',status:'in',employee:null,job:null,since:null});
+    var shed=document.getElementById('new-item-shed').value||'Workshop';
+    db.items.push({id:id,name:name,colour:colour,category:cat,type:'single',shed:shed,status:'in',employee:null,job:null,since:null});
     document.getElementById('new-item-name').value='';
     document.getElementById('new-item-id').value='';
     setItemType('single');
@@ -1169,11 +1256,11 @@ function prefillFromFlag(fi) {
   toast('Item name prefilled — enter the Item ID to complete');
 }
 
-function dismissFlag(flagId) {
+function dismissFlag(flagKey) {
   if (!confirm('Delete this notification?')) return;
-  // Remove entirely rather than marking resolved - prevents reappearing
   db.flags = (db.flags||[]).filter(function(f){
-    return f.id !== flagId && String(f.id) !== String(flagId);
+    var key = f.id || f.time || '';
+    return String(key) !== String(flagKey);
   });
   saveCloudDebounced(); renderItems(); toast('Notification deleted');
 }
@@ -1217,8 +1304,8 @@ function renderItems() {
           +(f.notes?'<div style="font-size:12px;color:#555;margin-bottom:3px">📝 '+esc(f.notes)+'</div>':'')
           +'<div style="font-size:11px;color:#aaa">Reported by: '+esc(f.reportedBy)+' · '+esc(f.time)+'</div>'
           +'<div class="row" style="gap:6px;margin-top:8px">'
-          +'<button class="btn sm primary" data-fi="'+fi+'" onclick="prefillFromFlag(this.dataset.fi)">+ Add to system</button>'
-          +'<button class="btn sm danger" data-flagid="'+esc(f.id||String(fi))+'" onclick="dismissFlag(this.dataset.flagid)">🗑 Delete</button>'
+          +'<button class="btn sm primary" data-flagkey="'+esc(f.id||f.time||String(fi))+'" onclick="prefillFromFlag(this.dataset.flagkey)">+ Add to system</button>'
+          +'<button class="btn sm danger" data-flagkey="'+esc(f.id||f.time||String(fi))+'" onclick="dismissFlag(this.dataset.flagkey)">🗑 Delete</button>'
           +'</div></div>';
       });
       fh += '</div>';
@@ -1260,13 +1347,17 @@ function renderItems() {
       var avail=(item.totalQty||0)-totalOut;
       var bulkStatus=avail>0?'<span class="badge in">'+avail+' available</span>':'<span class="badge out">All out</span>';
       var allocList=allocs.length?allocs.map(function(a){return '<span style="font-size:11px;color:#666">'+esc(a.employee)+': '+a.qty+'</span>';}).join(' · '):'';
+      var sq=item.shedQty||{Workshop:item.totalQty||0,'Berro Shed':0};
+      var wOut=allocs.filter(function(a){return a.shed==='Workshop';}).reduce(function(s,a){return s+a.qty;},0);
+      var bOut=allocs.filter(function(a){return a.shed==='Berro Shed';}).reduce(function(s,a){return s+a.qty;},0);
+      var shedSummary='🏭 '+(( sq['Workshop']||0)-wOut)+' avail · 🏚 '+((sq['Berro Shed']||0)-bOut)+' avail';
       html+='<div class="card" style="margin-bottom:8px"><div class="row-between">'
         +'<div style="flex:1;min-width:0"><div class="row" style="gap:6px;flex-wrap:wrap">'
         +'<span style="font-size:16px">📦</span>'
         +'<span class="iname">'+esc(item.name)+'</span>'
         +bulkStatus+bb
         +'</div>'
-        +'<div class="isub">Total: '+(item.totalQty||0)+' · Out: '+totalOut+(allocList?' · '+allocList:'')+'</div></div>'
+        +'<div class="isub">'+shedSummary+(allocList?' · '+allocList:'')+'</div></div>'
         +'<div class="row" style="gap:6px;margin-left:8px">'
         +'<button class="btn sm" data-idx="'+i+'" onclick="showQR(this.dataset.idx)">QR</button>'
         +'<button class="btn sm" data-idx="'+i+'" onclick="showItemLog(this.dataset.idx)">Log</button>'
@@ -1279,7 +1370,7 @@ function renderItems() {
         +'<span class="sdot '+(item.status==='in'?'in':'out')+'" style="background:'+(item.colour||'#27ae60')+'"></span>'
         +'<span class="iname">'+esc(item.name)+'</span>'
         +'<span class="badge '+(item.status==='in'?'in':'out')+'">'+(item.status==='in'?'Available':'Out')+'</span>'+bb
-        +'</div><div class="isub">ID: '+esc(item.id)+(item.status==='out'?' · '+esc(item.employee):'')+' </div></div>'
+        +'</div><div class="isub">ID: '+esc(item.id)+(item.status==='out'?' · Out: '+esc(item.employee):' · 📍 '+esc(item.shed||'Workshop'))+' </div></div>'
         +'<div class="row" style="gap:6px;margin-left:8px">'
         +'<button class="btn sm" data-idx="'+i+'" onclick="showQR(this.dataset.idx)">QR</button>'
         +'<button class="btn sm" data-idx="'+i+'" onclick="showItemLog(this.dataset.idx)">Log</button>'
@@ -1305,6 +1396,7 @@ function delItem(idx) {
   if(!confirm(msg)) return;
   db.items=db.items.filter(function(i){return i.id!==item.id;});
   db.bookings=db.bookings.filter(function(b){return b.itemId!==item.id;});
+  db.log=db.log.filter(function(l){return l.itemId!==item.id;});
   saveCloudDebounced(); renderItems(); renderCal(); renderBkList(); renderBkForm(); updateHdr(); toast('Item deleted');
 }
 
@@ -1355,7 +1447,13 @@ function delEmp(idx) {
   msg+='\n\nAre you sure?';
   if(!confirm(msg)) return;
   db.employees=db.employees.filter(function(e){return e.name!==emp.name;});
-  saveCloudDebounced(); renderEmps(); renderScanEmps(); renderBkForm(); toast('Removed');
+  // Clear references on any items still assigned to this employee
+  db.items.forEach(function(i){
+    if(i.employee===emp.name){i.status='in';i.employee=null;i.since=null;i.job=null;}
+  });
+  // Remove their bookings
+  db.bookings=db.bookings.filter(function(b){return b.employee!==emp.name;});
+  saveCloudDebounced(); renderEmps(); renderScanEmps(); renderBkForm(); renderItems(); toast('Employee removed');
 }
 
 // ─── Log ───────────────────────────────────────────────────────────────────
@@ -1410,15 +1508,35 @@ function renderLog() {
   el.innerHTML=sortedLog.map(function(e){
     var badgeClass=e.action==='out'?'out':e.action==='transfer'?'transfer':e.action==='bulk-out'?'out':e.action==='bulk-in'?'in':'in';
     var badgeLabel=e.action==='out'?'↑ Checked out':e.action==='transfer'?'⇄ Transferred':e.action==='bulk-out'?'↑ Took out ('+e.qty+')':e.action==='bulk-in'?'↓ Returned ('+e.qty+')':'↓ Returned';
-    var detail=e.action==='out'?esc(e.employee):e.action==='transfer'?esc(e.fromEmployee)+' → '+esc(e.employee):esc(e.employee);
+    var shedInfo=(e.action==='in'&&e.shed)?' → 📍'+esc(e.shed):'';
+    var detail=(e.action==='out'?esc(e.employee):e.action==='transfer'?esc(e.fromEmployee)+' → '+esc(e.employee):esc(e.employee))+shedInfo;
     return'<div class="log-row"><div class="row-between"><div><span class="badge '+badgeClass+'" style="margin-right:8px">'+badgeLabel+'</span><strong>'+esc(e.itemName)+'</strong></div><div class="log-time">'+e.time+'</div></div><div style="font-size:12px;color:#888;margin-top:3px">'+detail+'</div></div>';
   }).join('');
 }
 
 function clearLog() {
   if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
-  if(!confirm('Clear all log entries?')) return;
-  db.log=[]; saveCloudDebounced(); renderLog(); toast('Log cleared');
+  if(!confirm('Clear activity log? Items currently checked out will remain checked out.')) return;
+  // Before clearing, add synthetic checkpoint entries for all currently checked-out items
+  // so mergeDb log replay still correctly shows them as out after the clear
+  var nowD = new Date();
+  var now = nowD.toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Australia/Sydney'});
+  var isoNow = nowD.toISOString();
+  var snapshots = [];
+  db.items.forEach(function(item) {
+    if (item.status === 'out' && item.employee) {
+      snapshots.push({action:'out',itemId:item.id,itemName:item.name,
+        employee:item.employee,job:item.job||'—',time:now,isoTime:isoNow,checkpoint:true});
+    }
+    if (item.type === 'bulk' && item.allocations && item.allocations.length) {
+      item.allocations.forEach(function(a) {
+        snapshots.push({action:'bulk-out',itemId:item.id,itemName:item.name,
+          employee:a.employee,qty:a.qty,shed:a.shed||'',time:now,isoTime:isoNow,checkpoint:true});
+      });
+    }
+  });
+  db.log = snapshots;
+  saveCloudDebounced(); renderLog(); toast('Log cleared');
 }
 
 // ─── Export ────────────────────────────────────────────────────────────────
@@ -1584,6 +1702,8 @@ function showBulkModal(item, emp) {
   });
   document.getElementById('bulk-qty-out').value = 1;
   document.getElementById('bulk-qty-in').value = 1;
+  selectBulkShed('Workshop');
+  selectBulkReturnShed('Workshop');
   document.getElementById('bulk-take-section').style.display = 'block';
   document.getElementById('bulk-return-section').style.display = 'none';
   document.getElementById('bulk-toggle-btn').textContent = 'Show return section';
@@ -1594,19 +1714,32 @@ function showBulkModal(item, emp) {
 function updateBulkInfo() {
   var item = _bulkItem; if (!item) return;
   var allocs = item.allocations || [];
+  var sq = item.shedQty || {Workshop: item.totalQty||0, 'Berro Shed': 0};
+  var sheds = ['Workshop', 'Berro Shed'];
+  var shedEmoji = {Workshop:'🏭', 'Berro Shed':'🏚'};
   var totalOut = allocs.reduce(function(s,a){return s+a.qty;},0);
-  var avail = (item.totalQty||0) - totalOut;
+  var infoHtml = '';
+  sheds.forEach(function(shed) {
+    var shedTotal = sq[shed]||0;
+    var shedOut = allocs.filter(function(a){return a.shed===shed;}).reduce(function(s,a){return s+a.qty;},0);
+    var shedAvail = shedTotal - shedOut;
+    infoHtml += '<div style="background:#f8f8f8;border-radius:8px;padding:8px 10px;margin-bottom:8px">'
+      +'<div style="font-size:12px;font-weight:700;margin-bottom:4px">'+shedEmoji[shed]+' '+shed+'</div>'
+      +'<div style="display:flex;gap:12px;font-size:12px">'
+      +'<span>Total: <strong>'+shedTotal+'</strong></span>'
+      +'<span>Out: <strong style="color:#c0392b">'+shedOut+'</strong></span>'
+      +'<span>Available: <strong style="color:#27ae60">'+shedAvail+'</strong></span>'
+      +'</div></div>';
+  });
   var allocRows = allocs.length
-    ? allocs.map(function(a){return '<div style="display:flex;justify-content:space-between"><span>👤 '+esc(a.employee)+'</span><span style="font-weight:700">'+a.qty+' out</span></div>';}).join('')
-    : '<div style="color:#aaa">None currently out</div>';
-  document.getElementById('bulk-stock-info').innerHTML =
-    '<div style="display:flex;justify-content:space-between;margin-bottom:6px">'
-    +'<span>Total stock:</span><span style="font-weight:700">'+(item.totalQty||0)+'</span></div>'
-    +'<div style="display:flex;justify-content:space-between;margin-bottom:6px">'
-    +'<span>Currently out:</span><span style="font-weight:700;color:#c0392b">'+totalOut+'</span></div>'
-    +'<div style="display:flex;justify-content:space-between;margin-bottom:8px">'
-    +'<span>Available:</span><span style="font-weight:700;color:#27ae60">'+avail+'</span></div>'
-    +'<div style="border-top:1px solid #eee;padding-top:8px">'+allocRows+'</div>';
+    ? allocs.map(function(a){
+        return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0">'
+          +'<span>👤 '+esc(a.employee)+(a.shed?' ('+a.shed+')':'')+'</span>'
+          +'<span style="font-weight:700">'+a.qty+' out</span></div>';
+      }).join('')
+    : '<div style="color:#aaa;font-size:12px">None currently out</div>';
+  document.getElementById('bulk-stock-info').innerHTML = infoHtml
+    +'<div style="border-top:1px solid #eee;padding-top:8px;margin-top:4px">'+allocRows+'</div>';
 }
 
 function toggleBulkSection() {
@@ -1619,39 +1752,79 @@ function toggleBulkSection() {
 function confirmBulkOut() {
   var emp = document.getElementById('bulk-emp').value;
   var qty = parseInt(document.getElementById('bulk-qty-out').value) || 0;
-  if (!emp) { alert('Select an employee.'); return; }
-  if (qty < 1) { alert('Enter a quantity of at least 1.'); return; }
+  var shed = document.getElementById('bulk-shed-value').value || 'Workshop';
+  if (!emp) { toast('⚠ Select an employee.'); return; }
+  if (qty < 1) { toast('⚠ Enter a quantity of at least 1.'); return; }
   var item = _bulkItem;
+  // Check availability at selected shed
+  var sq = item.shedQty || {Workshop: item.totalQty||0, 'Berro Shed': 0};
   var allocs = item.allocations || [];
-  var totalOut = allocs.reduce(function(s,a){return s+a.qty;},0);
-  var avail = (item.totalQty||0) - totalOut;
-  if (qty > avail) { alert('Only ' + avail + ' available. Cannot take out ' + qty + '.'); return; }
-  // Add or update allocation for this employee
-  var existing = allocs.filter(function(a){return a.employee===emp;})[0];
+  var outFromShed = allocs.filter(function(a){return a.shed===shed;}).reduce(function(s,a){return s+a.qty;},0);
+  var availAtShed = (sq[shed]||0) - outFromShed;
+  if (qty > availAtShed) { toast('⚠ Only ' + availAtShed + ' available at ' + shed + '.'); return; }
+  // Add or update allocation
+  var existing = allocs.filter(function(a){return a.employee===emp && a.shed===shed;})[0];
   if (existing) existing.qty += qty;
-  else allocs.push({employee:emp, qty:qty});
+  else allocs.push({employee:emp, qty:qty, shed:shed});
   item.allocations = allocs;
   var nowB = new Date(); var now = nowB.toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Australia/Sydney'});
-  db.log.push({action:'bulk-out',itemId:item.id,itemName:item.name,employee:emp,qty:qty,time:now,isoTime:nowB.toISOString()});
-  saveCloudDebounced(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' checked out to ' + emp + ' ✓');
+  db.log.push({action:'bulk-out',itemId:item.id,itemName:item.name,employee:emp,qty:qty,shed:shed,time:now,isoTime:nowB.toISOString()});
+  saveCloudDebounced(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' from ' + shed + ' → ' + emp + ' ✓');
 }
 
 function confirmBulkIn() {
   var emp = document.getElementById('bulk-return-emp').value;
   var qty = parseInt(document.getElementById('bulk-qty-in').value) || 0;
-  if (!emp) { alert('Select an employee.'); return; }
-  if (qty < 1) { alert('Enter a quantity of at least 1.'); return; }
+  var returnShed = document.getElementById('bulk-return-shed-value').value || 'Workshop';
+  if (!emp) { toast('⚠ Select an employee.'); return; }
+  if (qty < 1) { toast('⚠ Enter a quantity of at least 1.'); return; }
   var item = _bulkItem;
   var allocs = item.allocations || [];
-  var existing = allocs.filter(function(a){return a.employee===emp;})[0];
-  if (!existing || existing.qty < qty) {
-    alert(emp + ' only has ' + (existing?existing.qty:0) + ' out. Cannot return ' + qty + '.'); return;
-  }
-  existing.qty -= qty;
-  if (existing.qty === 0) item.allocations = allocs.filter(function(a){return a.employee!==emp;});
+  // Find how many this employee has out total (any shed)
+  var totalEmpOut = allocs.filter(function(a){return a.employee===emp;}).reduce(function(s,a){return s+a.qty;},0);
+  if (totalEmpOut < qty) { toast('⚠ ' + emp + ' only has ' + totalEmpOut + ' out. Cannot return ' + qty + '.'); return; }
+  // Reduce qty from employee - deduct from their allocations oldest shed first
+  var remaining = qty;
+  allocs.filter(function(a){return a.employee===emp;}).forEach(function(a){
+    if (remaining <= 0) return;
+    var deduct = Math.min(a.qty, remaining);
+    a.qty -= deduct; remaining -= deduct;
+  });
+  item.allocations = allocs.filter(function(a){return a.qty>0;});
+  // Add returned qty back to the selected shed
+  if (!item.shedQty) item.shedQty = {Workshop: item.totalQty||0, 'Berro Shed': 0};
+  // shedQty tracks stock levels - returning to a shed increases available there
+  // (shedQty is set at creation; returns just update allocations, available = shedQty - outFromShed)
   var nowB = new Date(); var now = nowB.toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Australia/Sydney'});
-  db.log.push({action:'bulk-in',itemId:item.id,itemName:item.name,employee:emp,qty:qty,time:now,isoTime:nowB.toISOString()});
-  saveCloudDebounced(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' returned from ' + emp + ' ✓');
+  db.log.push({action:'bulk-in',itemId:item.id,itemName:item.name,employee:emp,qty:qty,shed:returnShed,time:now,isoTime:nowB.toISOString()});
+  saveCloudDebounced(); renderItems(); updateBulkInfo(); toast(qty + ' x ' + item.name + ' returned to ' + returnShed + ' ✓');
+}
+
+// ─── Bulk shed selectors ───────────────────────────────────────────────────
+function selectBulkShed(shed) {
+  document.getElementById('bulk-shed-value').value = shed;
+  var wb = document.getElementById('bulk-shed-workshop-btn');
+  var bb = document.getElementById('bulk-shed-berro-btn');
+  if (shed === 'Workshop') {
+    wb.style.background='#1a1a1a'; wb.style.color='#fff'; wb.style.borderColor='#1a1a1a';
+    bb.style.background='#fff'; bb.style.color='#888'; bb.style.borderColor='#ddd';
+  } else {
+    bb.style.background='#1a1a1a'; bb.style.color='#fff'; bb.style.borderColor='#1a1a1a';
+    wb.style.background='#fff'; wb.style.color='#888'; wb.style.borderColor='#ddd';
+  }
+}
+
+function selectBulkReturnShed(shed) {
+  document.getElementById('bulk-return-shed-value').value = shed;
+  var wb = document.getElementById('bulk-return-shed-workshop-btn');
+  var bb = document.getElementById('bulk-return-shed-berro-btn');
+  if (shed === 'Workshop') {
+    wb.style.background='#1a1a1a'; wb.style.color='#fff'; wb.style.borderColor='#1a1a1a';
+    bb.style.background='#fff'; bb.style.color='#888'; bb.style.borderColor='#ddd';
+  } else {
+    bb.style.background='#1a1a1a'; bb.style.color='#fff'; bb.style.borderColor='#1a1a1a';
+    wb.style.background='#fff'; wb.style.color='#888'; wb.style.borderColor='#ddd';
+  }
 }
 
 // ─── Role toggle helpers ───────────────────────────────────────────────────
@@ -1714,6 +1887,16 @@ function editItem(idx) {
   document.getElementById('edit-item-name').value = item.name;
   document.getElementById('edit-item-id').value = item.id;
   renderCatDropdown('edit-item-cat', item.category||'');
+  var isBulkEdit = item.type === 'bulk';
+  document.getElementById('edit-item-shed-single').style.display = isBulkEdit ? 'none' : 'block';
+  document.getElementById('edit-item-shed-bulk').style.display = isBulkEdit ? 'block' : 'none';
+  if (isBulkEdit) {
+    var sq = item.shedQty || {Workshop: item.totalQty||0, 'Berro Shed': 0};
+    document.getElementById('edit-item-qty-workshop').value = sq['Workshop']||0;
+    document.getElementById('edit-item-qty-berro').value = sq['Berro Shed']||0;
+  } else {
+    document.getElementById('edit-item-shed').value = item.shed||'Workshop';
+  }
   // Set colour picker
   var col = item.colour || '#f59e0b';
   document.querySelectorAll('.edit-colour-btn').forEach(function(b) {
@@ -1739,11 +1922,22 @@ function saveItemEdit() {
   var newId = document.getElementById('edit-item-id').value.trim();
   var newColour = getEditColour();
   var newCat = document.getElementById('edit-item-cat').value;
+  var isBulkSave = item.type === 'bulk';
+  var newShed = isBulkSave ? null : (document.getElementById('edit-item-shed').value||'Workshop');
+  var newShedQty = null;
+  if (isBulkSave) {
+    var wQty = parseInt(document.getElementById('edit-item-qty-workshop').value)||0;
+    var bQty = parseInt(document.getElementById('edit-item-qty-berro').value)||0;
+    newShedQty = {Workshop: wQty, 'Berro Shed': bQty};
+    item.totalQty = wQty + bQty;
+    item.shedQty = newShedQty;
+  }
   if (!newName || !newId) { alert('Name and ID cannot be empty.'); return; }
   var clash = db.items.some(function(i, i2) { return i.id === newId && i2 !== idx; });
   if (clash) { alert('That Item ID is already used by another item.'); return; }
   var oldId = item.id, oldName = item.name;
   item.name = newName; item.id = newId; item.colour = newColour; item.category = newCat;
+  if (!isBulkSave) item.shed = newShed;
   // Update references
   db.bookings.forEach(function(b) { if (b.itemId === oldId) { b.itemId = newId; b.itemName = newName; } });
   db.log.forEach(function(l) { if (l.itemId === oldId) { l.itemId = newId; l.itemName = newName; } });
@@ -1853,6 +2047,26 @@ window.addEventListener('DOMContentLoaded', function() {
         <button class="btn sm" onclick="addCategoryPrompt()">+ New</button>
       </div>
     </div>
+    <div class="field" id="edit-item-shed-single">
+      <label>Storage location</label>
+      <select id="edit-item-shed">
+        <option value="Workshop">Workshop</option>
+        <option value="Berro Shed">Berro Shed</option>
+      </select>
+    </div>
+    <div class="field" id="edit-item-shed-bulk" style="display:none">
+      <label>Quantity at each shed</label>
+      <div class="g2">
+        <div>
+          <label style="font-size:11px;color:#888;margin-bottom:4px;display:block">🏭 Workshop</label>
+          <input type="number" id="edit-item-qty-workshop" placeholder="0" min="0" value="0">
+        </div>
+        <div>
+          <label style="font-size:11px;color:#888;margin-bottom:4px;display:block">🏚 Berro Shed</label>
+          <input type="number" id="edit-item-qty-berro" placeholder="0" min="0" value="0">
+        </div>
+      </div>
+    </div>
     <div class="field">
       <label>Colour</label>
       <div class="row" style="flex-wrap:wrap;gap:8px" id="edit-colour-picker">
@@ -1885,6 +2099,19 @@ window.addEventListener('DOMContentLoaded', function() {
       <div class="field"><label>Employee taking items</label>
         <select id="bulk-emp"><option value="">Select employee...</option></select>
       </div>
+      <div class="field"><label>Taking from which shed?</label>
+        <div style="display:flex;gap:8px">
+          <button type="button" id="bulk-shed-workshop-btn" onclick="selectBulkShed('Workshop')"
+            style="flex:1;padding:8px;border-radius:8px;border:2px solid #1a1a1a;background:#1a1a1a;color:#fff;font-family:Arial,sans-serif;font-size:12px;font-weight:700;cursor:pointer">
+            🏭 Workshop
+          </button>
+          <button type="button" id="bulk-shed-berro-btn" onclick="selectBulkShed('Berro Shed')"
+            style="flex:1;padding:8px;border-radius:8px;border:2px solid #ddd;background:#fff;color:#888;font-family:Arial,sans-serif;font-size:12px;font-weight:700;cursor:pointer">
+            🏚 Berro Shed
+          </button>
+        </div>
+        <input type="hidden" id="bulk-shed-value" value="Workshop">
+      </div>
       <div class="field"><label>Quantity taking out</label>
         <input type="number" id="bulk-qty-out" min="1" value="1" placeholder="How many?">
       </div>
@@ -1893,6 +2120,19 @@ window.addEventListener('DOMContentLoaded', function() {
     <div id="bulk-return-section" style="display:none">
       <div class="field"><label>Who is returning items?</label>
         <select id="bulk-return-emp"><option value="">Select employee...</option></select>
+      </div>
+      <div class="field"><label>Returning to which shed?</label>
+        <div style="display:flex;gap:8px">
+          <button type="button" id="bulk-return-shed-workshop-btn" onclick="selectBulkReturnShed('Workshop')"
+            style="flex:1;padding:8px;border-radius:8px;border:2px solid #1a1a1a;background:#1a1a1a;color:#fff;font-family:Arial,sans-serif;font-size:12px;font-weight:700;cursor:pointer">
+            🏭 Workshop
+          </button>
+          <button type="button" id="bulk-return-shed-berro-btn" onclick="selectBulkReturnShed('Berro Shed')"
+            style="flex:1;padding:8px;border-radius:8px;border:2px solid #ddd;background:#fff;color:#888;font-family:Arial,sans-serif;font-size:12px;font-weight:700;cursor:pointer">
+            🏚 Berro Shed
+          </button>
+        </div>
+        <input type="hidden" id="bulk-return-shed-value" value="Workshop">
       </div>
       <div class="field"><label>Quantity returning</label>
         <input type="number" id="bulk-qty-in" min="1" value="1" placeholder="How many?">
