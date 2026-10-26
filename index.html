@@ -593,6 +593,7 @@ function ensureDbKeys() {
   if (!db.flags) db.flags=[];
   if (!db.categories) db.categories=[];
   if (!db.version) db.version=0;
+  if (!db.deletedFlags) db.deletedFlags=[];
   // Migrate old log entries: add isoTime and lid if missing
   db.log.forEach(function(e) {
     if (!e.isoTime) { var ts = logTs(e); if (ts) e.isoTime = new Date(ts).toISOString(); }
@@ -727,18 +728,26 @@ function mergeDb(local, cloud) {
   merged.bookings = Object.values(bkMap);
 
   // Flags: union by id - resolved and deleted status always propagates
+  // deletedFlags is a list of keys that have been explicitly deleted - never resurrect these
+  var deletedFlagKeys = {};
+  (local.deletedFlags||[]).forEach(function(k){ deletedFlagKeys[String(k)]=true; });
+  (cloud.deletedFlags||[]).forEach(function(k){ deletedFlagKeys[String(k)]=true; });
   var flagMap = {};
-  (cloud.flags||[]).forEach(function(f){ flagMap[f.id||f.time]=JSON.parse(JSON.stringify(f)); });
+  (cloud.flags||[]).forEach(function(f){
+    var key = String(f.id||f.time||'');
+    if (!deletedFlagKeys[key]) flagMap[key]=JSON.parse(JSON.stringify(f));
+  });
   (local.flags||[]).forEach(function(f){
-    var key = f.id||f.time;
+    var key = String(f.id||f.time||'');
+    if (deletedFlagKeys[key]) return; // never resurrect deleted flags
     if (!flagMap[key]) { flagMap[key]=JSON.parse(JSON.stringify(f)); }
     else {
-      // Merge - deleted/resolved always wins
       if (f.resolved) flagMap[key].resolved=true;
-      if (f.deleted) flagMap[key].deleted=true;
+      if (f.deleted) { flagMap[key].deleted=true; }
     }
   });
-  merged.flags = Object.values(flagMap);
+  merged.flags = Object.values(flagMap).filter(function(f){ return !f.deleted; });
+  merged.deletedFlags = Object.keys(deletedFlagKeys);
 
   // Categories: union
   var cats = {};
@@ -1278,6 +1287,10 @@ function addItem() {
     setItemType('single');
   }
   saveCloudDebounced(); renderItems(); renderBkForm(); updateHdr(); toast('Item added ✓');
+  // Expand the category the new item belongs to so it's visible
+  var newCat = (type==='bulk' ? document.getElementById('new-item-cat').value : document.getElementById('new-item-cat').value) || '';
+  var newCatId = 'cat-' + (newCat||'Uncategorised').replace(/[^a-zA-Z0-9]/g,'-');
+  localStorage.setItem('cat-open-'+newCatId, 'true');
 }
 
 function toggleCat(catId) {
@@ -1320,17 +1333,21 @@ function prefillFromFlag(fi) {
 }
 
 function dismissFlag(flagKey) {
-  if (!confirm('Delete this notification?')) return;
-  // Mark as deleted rather than removing - this persists through cloud merges
-  // (removing from array gets overwritten when cloud still has the flag)
+  var pw = prompt('Enter admin password to delete this notification:');
+  if (!pw) return;
+  if (pw !== ADMIN_PASSWORD) { toast('⚠ Incorrect password.'); return; }
   var flags = db.flags || [];
   var found = false;
   flags.forEach(function(f) {
-    var key = f.id || f.time || '';
-    if (String(key) === String(flagKey)) { f.resolved = true; f.deleted = true; found = true; }
+    var key = String(f.id || f.time || '');
+    if (key === String(flagKey)) { f.resolved = true; f.deleted = true; found = true; }
   });
   if (!found) { toast('Notification not found.'); return; }
-  db.flags = flags;
+  // Also filter out so it disappears immediately before cloud confirms
+  db.flags = flags.filter(function(f) { return !f.deleted; });
+  // Keep deleted marker in a separate list so merge doesn't resurrect it
+  if (!db.deletedFlags) db.deletedFlags = [];
+  db.deletedFlags.push(flagKey);
   saveCloudDebounced(); renderItems(); toast('Notification deleted');
 }
 
@@ -1456,13 +1473,13 @@ function renderItems() {
 function delItem(idx) {
   if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
   var item=db.items[parseInt(idx)]; if(!item) return;
-  var pw=prompt('Enter admin password to delete this item:');
-  if(!pw||pw!==ADMIN_PASSWORD){alert('Incorrect password.');return;}
   var bookingCount=db.bookings.filter(function(b){return b.itemId===item.id&&b.status==='active';}).length;
-  var msg='⚠️ DELETE: '+item.name+'\n\nThis cannot be undone.';
-  if(item.status==='out') msg+='\n❗ Currently checked out to '+item.employee;
-  if(bookingCount>0) msg+='\n❗ Has '+bookingCount+' active booking(s)';
-  if(!confirm(msg)) return;
+  var msg='DELETE: '+item.name+'\n\nEnter admin password to confirm:';
+  if(item.status==='out') msg+='\n\n⚠ Currently out with '+item.employee;
+  if(bookingCount>0) msg+='\n⚠ Has '+bookingCount+' active booking(s)';
+  var pw=prompt(msg);
+  if(!pw) return;
+  if(pw!==ADMIN_PASSWORD){toast('⚠ Incorrect password — item not deleted.'); return;}
   db.items=db.items.filter(function(i){return i.id!==item.id;});
   db.bookings=db.bookings.filter(function(b){return b.itemId!==item.id;});
   db.log=db.log.filter(function(l){return l.itemId!==item.id;});
@@ -1506,15 +1523,14 @@ function renderEmps() {
 function delEmp(idx) {
   if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
   var emp=db.employees[parseInt(idx)]; if(!emp) return;
-  var pw=prompt('Enter admin password to remove this employee:');
-  if(!pw||pw!==ADMIN_PASSWORD){alert('Incorrect password.');return;}
   var hasItems=db.items.filter(function(i){return i.employee===emp.name;}).length;
   var hasBookings=db.bookings.filter(function(b){return b.employee===emp.name&&b.status==='active';}).length;
-  var msg='⚠️ REMOVE: '+emp.name;
-  if(hasItems>0) msg+='\n❗ Has '+hasItems+' item(s) checked out';
-  if(hasBookings>0) msg+='\n❗ Has '+hasBookings+' active booking(s)';
-  msg+='\n\nAre you sure?';
-  if(!confirm(msg)) return;
+  var msg='REMOVE: '+emp.name+'\n\nEnter admin password to confirm:';
+  if(hasItems>0) msg+='\n\n⚠ Has '+hasItems+' item(s) checked out';
+  if(hasBookings>0) msg+='\n⚠ Has '+hasBookings+' active booking(s)';
+  var pw=prompt(msg);
+  if(!pw) return;
+  if(pw!==ADMIN_PASSWORD){toast('⚠ Incorrect password — employee not removed.'); return;}
   db.employees=db.employees.filter(function(e){return e.name!==emp.name;});
   // Clear references on any items still assigned to this employee
   db.items.forEach(function(i){
