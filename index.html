@@ -684,10 +684,18 @@ function mergeDb(local, cloud) {
   });
   merged.bookings = Object.values(bkMap);
 
-  // Flags: union by id
+  // Flags: union by id - resolved and deleted status always propagates
   var flagMap = {};
-  (cloud.flags||[]).forEach(function(f){ flagMap[f.id||f.time]=f; });
-  (local.flags||[]).forEach(function(f){ if(!flagMap[f.id||f.time]) flagMap[f.id||f.time]=f; else if(f.resolved) flagMap[f.id||f.time].resolved=true; });
+  (cloud.flags||[]).forEach(function(f){ flagMap[f.id||f.time]=JSON.parse(JSON.stringify(f)); });
+  (local.flags||[]).forEach(function(f){
+    var key = f.id||f.time;
+    if (!flagMap[key]) { flagMap[key]=JSON.parse(JSON.stringify(f)); }
+    else {
+      // Merge - deleted/resolved always wins
+      if (f.resolved) flagMap[key].resolved=true;
+      if (f.deleted) flagMap[key].deleted=true;
+    }
+  });
   merged.flags = Object.values(flagMap);
 
   // Categories: union
@@ -1258,10 +1266,16 @@ function prefillFromFlag(fi) {
 
 function dismissFlag(flagKey) {
   if (!confirm('Delete this notification?')) return;
-  db.flags = (db.flags||[]).filter(function(f){
+  // Mark as deleted rather than removing - this persists through cloud merges
+  // (removing from array gets overwritten when cloud still has the flag)
+  var flags = db.flags || [];
+  var found = false;
+  flags.forEach(function(f) {
     var key = f.id || f.time || '';
-    return String(key) !== String(flagKey);
+    if (String(key) === String(flagKey)) { f.resolved = true; f.deleted = true; found = true; }
   });
+  if (!found) { toast('Notification not found.'); return; }
+  db.flags = flags;
   saveCloudDebounced(); renderItems(); toast('Notification deleted');
 }
 
@@ -1294,7 +1308,7 @@ function renderItems() {
   // Render admin flags
   var flagsCard = document.getElementById('flags-card');
   if (flagsCard) {
-    var flags = (db.flags||[]).filter(function(f){return !f.resolved;});
+    var flags = (db.flags||[]).filter(function(f){return !f.resolved && !f.deleted;});
     if (IS_ADMIN && flags.length) {
       var fh = '<div class="card" style="border-color:#f59e0b;margin-bottom:10px">'
         +'<div style="font-size:13px;font-weight:700;color:#d4830a;margin-bottom:8px">🚩 '+flags.length+' item(s) need to be added</div>';
