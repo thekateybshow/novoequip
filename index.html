@@ -231,11 +231,11 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
         <div class="g2">
           <div>
             <label style="font-size:11px;color:#888;margin-bottom:4px;display:block">🏭 Workshop</label>
-            <input type="number" id="new-item-qty-workshop" placeholder="0" min="0" value="0">
+            <input type="number" id="new-item-qty-workshop" placeholder="e.g. 10" min="0" value="">
           </div>
           <div>
             <label style="font-size:11px;color:#888;margin-bottom:4px;display:block">🏚 Berro Shed</label>
-            <input type="number" id="new-item-qty-berro" placeholder="0" min="0" value="0">
+            <input type="number" id="new-item-qty-berro" placeholder="e.g. 5" min="0" value="">
           </div>
         </div>
       </div>
@@ -594,10 +594,47 @@ function ensureDbKeys() {
   if (!db.categories) db.categories=[];
   if (!db.version) db.version=0;
   if (!db.deletedFlags) db.deletedFlags=[];
+  if (!db.deletedItems) db.deletedItems=[];
+  if (!db.deletedEmployees) db.deletedEmployees=[];
   // Migrate old log entries: add isoTime and lid if missing
   db.log.forEach(function(e) {
     if (!e.isoTime) { var ts = logTs(e); if (ts) e.isoTime = new Date(ts).toISOString(); }
     if (!e.lid) { e.lid = (e.isoTime||e.time||'') + '|' + (e.itemId||'') + '|' + (e.action||'') + '|' + (e.employee||''); }
+  });
+}
+
+// ── Tombstones & employee release helpers ────────────────────────────────
+function addTombstone(list, field, value, iso) {
+  db[list] = (db[list]||[]).filter(function(t){ return t[field] !== value; });
+  var t = {deletedAt: iso}; t[field] = value; db[list].push(t);
+}
+// Writes return entries for everything an employee still has out. If newName is given
+// (rename), also writes matching take-out entries under the new name and moves the
+// local item/allocation records across. Without newName (delete) the stock is returned.
+function releaseEmployeeEquipment(oldName, newName) {
+  var nowD = new Date();
+  var disp = nowD.toLocaleString('en-AU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Australia/Sydney'});
+  var inIso = nowD.toISOString(), outIso = new Date(nowD.getTime()+1).toISOString();
+  db.items.forEach(function(i) {
+    if (i.type === 'bulk') {
+      (i.allocations||[]).forEach(function(a) {
+        if (a.employee !== oldName || !(a.qty > 0)) return;
+        db.log.push({lid:makeLogId(),action:'bulk-in',itemId:i.id,itemName:i.name,employee:oldName,qty:a.qty,shed:a.shed||'Workshop',time:disp,isoTime:inIso});
+        if (newName) {
+          db.log.push({lid:makeLogId(),action:'bulk-out',itemId:i.id,itemName:i.name,employee:newName,qty:a.qty,shed:a.shed||'',time:disp,isoTime:outIso});
+          a.employee = newName;
+        }
+      });
+      if (!newName) i.allocations = (i.allocations||[]).filter(function(a){ return a.employee !== oldName; });
+    } else if (i.status === 'out' && i.employee === oldName) {
+      var e1 = {lid:makeLogId(),action:'in',itemId:i.id,itemName:i.name,employee:oldName,job:i.job||'—',time:disp,isoTime:inIso};
+      if (i.shed) e1.shed = i.shed;
+      db.log.push(e1);
+      if (newName) {
+        db.log.push({lid:makeLogId(),action:'out',itemId:i.id,itemName:i.name,employee:newName,job:i.job||'—',time:i.since||disp,isoTime:outIso});
+        i.employee = newName;
+      } else { i.status='in'; i.employee=null; i.since=null; i.job=null; }
+    }
   });
 }
 
@@ -627,9 +664,28 @@ function mergeDb(local, cloud) {
   // Items: union by id
   // Use the LOG as the source of truth for item status - not the item record itself
   // This means a return (log entry 'in') always wins over a stale cloud 'out' status
+  // Tombstones: union of both sides, keeping the latest deletedAt per key
+  function tombMap(a, b, field) {
+    var m = Object.create(null);
+    [a, b].forEach(function(list){ (list||[]).forEach(function(t){
+      if (!t || t[field] === undefined || t[field] === null) return;
+      var ts = Date.parse(t.deletedAt) || 0;
+      if (!(t[field] in m) || ts > m[t[field]]) m[t[field]] = ts;
+    }); });
+    return m;
+  }
+  var delItems = tombMap(local.deletedItems, cloud.deletedItems, 'id');
+  var delEmps = tombMap(local.deletedEmployees, cloud.deletedEmployees, 'name');
+  function createdMs(r) { return (r && r.createdAt) ? (Date.parse(r.createdAt) || 0) : 0; } // no createdAt = old
+  function bkMs(b) { if (b.createdAt) return Date.parse(b.createdAt) || 0; return /^\d{13}$/.test(String(b.id)) ? Number(b.id) : 0; }
+  function itemGone(i) { var d = delItems[i.id]; return d !== undefined && !(createdMs(i) > d); }
+  function empGone(e) { var d = delEmps[e.name]; return d !== undefined && !(createdMs(e) > d); }
+  var clearedMs = Math.max(Date.parse(local.logClearedAt)||0, Date.parse(cloud.logClearedAt)||0);
+
   var itemMap = {};
-  (cloud.items||[]).forEach(function(i){ itemMap[i.id] = JSON.parse(JSON.stringify(i)); });
+  (cloud.items||[]).forEach(function(i){ if (itemGone(i)) return; itemMap[i.id] = JSON.parse(JSON.stringify(i)); });
   (local.items||[]).forEach(function(i){
+    if (itemGone(i)) return;
     if (!itemMap[i.id]) { itemMap[i.id] = JSON.parse(JSON.stringify(i)); }
     else {
       var c = itemMap[i.id];
@@ -664,8 +720,15 @@ function mergeDb(local, cloud) {
   var allLog = [];
   var logMap2 = {};
   function logKey2(e){ return e.lid || ((e.time||'')+'|'+(e.itemId||'')+'|'+(e.action||'')+'|'+(e.employee||'')); }
-  (cloud.log||[]).forEach(function(e){ logMap2[logKey2(e)]=e; });
-  (local.log||[]).forEach(function(e){ logMap2[logKey2(e)]=e; });
+  function keepLog(e) {
+    var ts = logTs(e);
+    if (clearedMs && ts < clearedMs) return false;            // cleared (clearLog checkpoints are stamped at clear time, so they stay)
+    var d = delItems[e.itemId];
+    if (d !== undefined && ts <= d) return false;              // belongs to a deleted item
+    return true;
+  }
+  (cloud.log||[]).forEach(function(e){ if (keepLog(e)) logMap2[logKey2(e)]=e; });
+  (local.log||[]).forEach(function(e){ if (keepLog(e)) logMap2[logKey2(e)]=e; });
   Object.values(logMap2).forEach(function(e) {
     if (!e.isoTime) { var ts = logTs(e); if (ts) e.isoTime = new Date(ts).toISOString(); }
   });
@@ -711,8 +774,8 @@ function mergeDb(local, cloud) {
 
   // Employees: union by name
   var empMap = {};
-  (cloud.employees||[]).forEach(function(e){ empMap[e.name]=e; });
-  (local.employees||[]).forEach(function(e){ if(!empMap[e.name]) empMap[e.name]=e; else Object.assign(empMap[e.name],e); });
+  (cloud.employees||[]).forEach(function(e){ if (!empGone(e)) empMap[e.name]=e; });
+  (local.employees||[]).forEach(function(e){ if (empGone(e)) return; if(!empMap[e.name]) empMap[e.name]=e; else Object.assign(empMap[e.name],e); });
   merged.employees = Object.values(empMap).sort(function(a,b){return a.name.localeCompare(b.name);});
 
   // Log: already built above as allLog (union of cloud + local, never loses entries)
@@ -725,7 +788,12 @@ function mergeDb(local, cloud) {
     if (!bkMap[b.id]) bkMap[b.id]=b;
     else if (b.status==='cancelled') bkMap[b.id].status='cancelled';
   });
-  merged.bookings = Object.values(bkMap);
+  merged.bookings = Object.values(bkMap).filter(function(b){
+    var t = bkMs(b);
+    var di = delItems[b.itemId]; if (di !== undefined && t <= di) return false;
+    var de = delEmps[b.employee]; if (de !== undefined && t <= de) return false;
+    return true;
+  });
 
   // Flags: union by id - resolved and deleted status always propagates
   // deletedFlags is a list of keys that have been explicitly deleted - never resurrect these
@@ -754,6 +822,11 @@ function mergeDb(local, cloud) {
   (cloud.categories||[]).forEach(function(c){ cats[c]=1; });
   (local.categories||[]).forEach(function(c){ cats[c]=1; });
   merged.categories = Object.keys(cats).sort();
+
+  // Tombstones + log-clear marker travel with the data
+  merged.deletedItems = Object.keys(delItems).map(function(k){ return {id:k, deletedAt:new Date(delItems[k]).toISOString()}; });
+  merged.deletedEmployees = Object.keys(delEmps).map(function(k){ return {name:k, deletedAt:new Date(delEmps[k]).toISOString()}; });
+  if (clearedMs) merged.logClearedAt = new Date(clearedMs).toISOString();
 
   // Increment version
   merged.version = Math.max(cloud.version||0, local.version||0) + 1;
@@ -1184,7 +1257,7 @@ function addBooking() {
   }
   var clash=db.bookings.filter(function(b){return b.itemId===itemId&&b.status==='active'&&b.from<=to&&b.to>=from;})[0];
   if(clash){alert('❌ Booking conflict!\n\n'+item.name+' is already booked by '+clash.employee+'\nFrom: '+clash.from+' to '+clash.to+'\n\nPlease choose different dates.');return;}
-  db.bookings.push({id:Date.now().toString(),itemId:itemId,itemName:item.name,employee:emp,from:from,to:to,job:job||'—',status:'active',created:new Date().toLocaleString('en-AU', { timeZone:'Australia/Sydney' })});
+  db.bookings.push({id:Date.now().toString(),itemId:itemId,itemName:item.name,employee:emp,from:from,to:to,job:job||'—',status:'active',createdAt:new Date().toISOString(),created:new Date().toLocaleString('en-AU', { timeZone:'Australia/Sydney' })});
   // Clear form after successful booking
   document.getElementById('bk-item').value='';
   document.getElementById('bk-emp').value='';
@@ -1251,46 +1324,50 @@ function setItemType(type) {
 }
 
 function addItem() {
-  if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
-  var name=document.getElementById('new-item-name').value.trim();
-  var type=document.getElementById('new-item-type').value;
-  var colour=getSelectedColour();
-  if(!name){toast('⚠ Enter item name.'); return;}
-  if(type==='bulk') {
-    var qty=parseInt(document.getElementById('new-item-qty').value)||1;
-    var bulkCustomId = document.getElementById('new-bulk-id').value.trim();
-    var id = bulkCustomId || ('BULK-'+name.replace(/[^a-zA-Z0-9]/g,'-').toUpperCase()+'-'+Date.now().toString().slice(-4));
-    // Check for duplicate ID
-    if(db.items.some(function(x){return x.id.toLowerCase()===id.toLowerCase();})){toast('⚠ That Item ID already exists.'); return;}
-    document.getElementById('new-bulk-id').value='';
+  try {
+    if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
+    var name=document.getElementById('new-item-name').value.trim();
+    var type=document.getElementById('new-item-type').value;
+    var colour=getSelectedColour();
+    if(!name){toast('⚠ Enter item name.'); return;}
     var cat=document.getElementById('new-item-cat').value;
-    var qtyWorkshop=parseInt(document.getElementById('new-item-qty-workshop').value)||0;
-    var qtyBerro=parseInt(document.getElementById('new-item-qty-berro').value)||0;
-    var totalQty=qtyWorkshop+qtyBerro;
-    if(totalQty<1){toast('⚠ Enter at least 1 item at one shed.'); return;}
-    db.items.push({id:id,name:name,colour:colour,category:cat,type:'bulk',
-      shedQty:{Workshop:qtyWorkshop,'Berro Shed':qtyBerro},
-      totalQty:totalQty,allocations:[],status:'in',employee:null,job:null,since:null});
-    document.getElementById('new-item-name').value='';
-    document.getElementById('new-item-qty-workshop').value='0';
-    document.getElementById('new-item-qty-berro').value='0';
+    var createdAt=new Date().toISOString();
+    if(type==='bulk') {
+      var bulkCustomId = document.getElementById('new-bulk-id').value.trim();
+      var id = bulkCustomId || ('BULK-'+name.replace(/[^a-zA-Z0-9]/g,'-').toUpperCase()+'-'+Date.now().toString().slice(-4));
+      // Check for duplicate ID
+      if(db.items.some(function(x){return (x.id||'').toLowerCase()===id.toLowerCase();})){toast('⚠ That Item ID already exists.'); return;}
+      var qtyWorkshop=parseInt(document.getElementById('new-item-qty-workshop').value)||0;
+      var qtyBerro=parseInt(document.getElementById('new-item-qty-berro').value)||0;
+      var totalQty=qtyWorkshop+qtyBerro;
+      if(totalQty<1){toast('⚠ Enter quantity for at least one shed (Workshop or Berro Shed).'); return;}
+      db.items.push({id:id,name:name,colour:colour,category:cat,type:'bulk',
+        shedQty:{Workshop:qtyWorkshop,'Berro Shed':qtyBerro},
+        totalQty:totalQty,allocations:[],status:'in',employee:null,job:null,since:null,createdAt:createdAt});
+      document.getElementById('new-bulk-id').value='';
+      document.getElementById('new-item-name').value='';
+      document.getElementById('new-item-qty-workshop').value='';
+      document.getElementById('new-item-qty-berro').value='';
+    } else {
+      var id=document.getElementById('new-item-id').value.trim();
+      if(!id){alert('Enter item ID.');return;}
+      if(db.items.some(function(x){return (x.id||'').toLowerCase()===id.toLowerCase();})){toast('⚠ That Item ID already exists.'); return;}
+      var shed=document.getElementById('new-item-shed').value||'Workshop';
+      db.items.push({id:id,name:name,colour:colour,category:cat,type:'single',shed:shed,status:'in',employee:null,job:null,since:null,createdAt:createdAt});
+      document.getElementById('new-item-name').value='';
+      document.getElementById('new-item-id').value='';
+    }
+    // Expand the item's category BEFORE rendering so the new item isn't hidden in a collapsed category
+    try {
+      var newCatId = 'cat-' + (cat||'Uncategorised').replace(/[^a-zA-Z0-9]/g,'-');
+      localStorage.setItem('cat-open-'+newCatId, 'true');
+    } catch(se) {}
     setItemType('single');
-  } else {
-    var id=document.getElementById('new-item-id').value.trim();
-    if(!id){alert('Enter item ID.');return;}
-    for(var i=0;i<db.items.length;i++){if(db.items[i].id===id){toast('⚠ That Item ID already exists.'); return;}}
-    var cat=document.getElementById('new-item-cat').value;
-    var shed=document.getElementById('new-item-shed').value||'Workshop';
-    db.items.push({id:id,name:name,colour:colour,category:cat,type:'single',shed:shed,status:'in',employee:null,job:null,since:null});
-    document.getElementById('new-item-name').value='';
-    document.getElementById('new-item-id').value='';
-    setItemType('single');
+    saveCloudDebounced(); renderItems(); renderBkForm(); updateHdr(); toast('Item added ✓');
+  } catch(e) {
+    console.error('addItem failed:', e);
+    alert('Could not add item: '+e.message);
   }
-  saveCloudDebounced(); renderItems(); renderBkForm(); updateHdr(); toast('Item added ✓');
-  // Expand the category the new item belongs to so it's visible
-  var newCat = (type==='bulk' ? document.getElementById('new-item-cat').value : document.getElementById('new-item-cat').value) || '';
-  var newCatId = 'cat-' + (newCat||'Uncategorised').replace(/[^a-zA-Z0-9]/g,'-');
-  localStorage.setItem('cat-open-'+newCatId, 'true');
 }
 
 function toggleCat(catId) {
@@ -1445,10 +1522,10 @@ function renderItems() {
         +'</div>'
         +'<div class="isub">'+shedSummary+(allocList?' · '+allocList:'')+'</div></div>'
         +'<div class="row" style="gap:6px;margin-left:8px">'
-        +'<button class="btn sm" data-idx="'+i+'" onclick="showQR(this.dataset.idx)">QR</button>'
-        +'<button class="btn sm" data-idx="'+i+'" onclick="showItemLog(this.dataset.idx)">Log</button>'
-        +(IS_ADMIN?'<button class="btn sm" data-idx="'+i+'" onclick="editItem(this.dataset.idx)">Edit</button>':'')
-        +(IS_ADMIN?'<button class="btn danger sm" data-idx="'+i+'" onclick="delItem(this.dataset.idx)">✕</button>':'')
+        +'<button class="btn sm" data-id="'+esc(item.id)+'" onclick="showQR(this.dataset.id)">QR</button>'
+        +'<button class="btn sm" data-id="'+esc(item.id)+'" onclick="showItemLog(this.dataset.id)">Log</button>'
+        +(IS_ADMIN?'<button class="btn sm" data-id="'+esc(item.id)+'" onclick="editItem(this.dataset.id)">Edit</button>':'')
+        +(IS_ADMIN?'<button class="btn danger sm" data-id="'+esc(item.id)+'" onclick="delItem(this.dataset.id)">✕</button>':'')
         +'</div></div></div>';
     } else {
       html+='<div class="card" style="margin-bottom:8px"><div class="row-between">'
@@ -1458,10 +1535,10 @@ function renderItems() {
         +'<span class="badge '+(item.status==='in'?'in':'out')+'">'+(item.status==='in'?'Available':'Out')+'</span>'+bb
         +'</div><div class="isub">ID: '+esc(item.id)+(item.status==='out'?' · Out: '+esc(item.employee):' · 📍 '+esc(item.shed||'Workshop'))+' </div></div>'
         +'<div class="row" style="gap:6px;margin-left:8px">'
-        +'<button class="btn sm" data-idx="'+i+'" onclick="showQR(this.dataset.idx)">QR</button>'
-        +'<button class="btn sm" data-idx="'+i+'" onclick="showItemLog(this.dataset.idx)">Log</button>'
-        +(IS_ADMIN?'<button class="btn sm" data-idx="'+i+'" onclick="editItem(this.dataset.idx)">Edit</button>':'')
-        +(IS_ADMIN?'<button class="btn danger sm" data-idx="'+i+'" onclick="delItem(this.dataset.idx)">✕</button>':'')
+        +'<button class="btn sm" data-id="'+esc(item.id)+'" onclick="showQR(this.dataset.id)">QR</button>'
+        +'<button class="btn sm" data-id="'+esc(item.id)+'" onclick="showItemLog(this.dataset.id)">Log</button>'
+        +(IS_ADMIN?'<button class="btn sm" data-id="'+esc(item.id)+'" onclick="editItem(this.dataset.id)">Edit</button>':'')
+        +(IS_ADMIN?'<button class="btn danger sm" data-id="'+esc(item.id)+'" onclick="delItem(this.dataset.id)">✕</button>':'')
         +'</div></div></div>';
     }
     }
@@ -1470,9 +1547,9 @@ function renderItems() {
   el.innerHTML=html;
 }
 
-function delItem(idx) {
+function delItem(itemId) {
   if(!IS_ADMIN){toast('⚠ Admin access required.'); return;}
-  var item=db.items[parseInt(idx)]; if(!item) return;
+  var item=db.items.filter(function(x){return x.id===itemId;})[0]; if(!item) return;
   var bookingCount=db.bookings.filter(function(b){return b.itemId===item.id&&b.status==='active';}).length;
   var msg='DELETE: '+item.name+'\n\nEnter admin password to confirm:';
   if(item.status==='out') msg+='\n\n⚠ Currently out with '+item.employee;
@@ -1483,6 +1560,7 @@ function delItem(idx) {
   db.items=db.items.filter(function(i){return i.id!==item.id;});
   db.bookings=db.bookings.filter(function(b){return b.itemId!==item.id;});
   db.log=db.log.filter(function(l){return l.itemId!==item.id;});
+  addTombstone('deletedItems','id',item.id,new Date().toISOString());
   saveCloudDebounced(); renderItems(); renderCal(); renderBkList(); renderBkForm(); updateHdr(); toast('Item deleted');
 }
 
@@ -1492,7 +1570,7 @@ function addEmp() {
   var name=document.getElementById('new-emp').value.trim(); if(!name) return;
   for(var i=0;i<db.employees.length;i++){if(db.employees[i].name.toLowerCase()===name.toLowerCase()){toast('⚠ Employee already exists.'); return;}}
   var canBook = document.getElementById('new-emp-can-book').value === 'true';
-  db.employees.push({name:name, canBook:canBook}); 
+  db.employees.push({name:name, canBook:canBook, createdAt:new Date().toISOString()}); 
   db.employees.sort(function(a,b){return a.name.localeCompare(b.name);});
   document.getElementById('new-emp').value='';
   setRoleBtn(false);
@@ -1531,12 +1609,11 @@ function delEmp(idx) {
   var pw=prompt(msg);
   if(!pw) return;
   if(pw!==ADMIN_PASSWORD){toast('⚠ Incorrect password — employee not removed.'); return;}
+  // Log returns for anything they still have out (single + bulk) so log replay doesn't put it back out to them
+  releaseEmployeeEquipment(emp.name, null);
   db.employees=db.employees.filter(function(e){return e.name!==emp.name;});
-  // Clear references on any items still assigned to this employee
-  db.items.forEach(function(i){
-    if(i.employee===emp.name){i.status='in';i.employee=null;i.since=null;i.job=null;}
-  });
-  // Remove their bookings
+  addTombstone('deletedEmployees','name',emp.name,new Date().toISOString());
+  // Remove their bookings (log history is kept)
   db.bookings=db.bookings.filter(function(b){return b.employee!==emp.name;});
   saveCloudDebounced(); renderEmps(); renderScanEmps(); renderBkForm(); renderItems(); toast('Employee removed');
 }
@@ -1610,17 +1687,18 @@ function clearLog() {
   var snapshots = [];
   db.items.forEach(function(item) {
     if (item.status === 'out' && item.employee) {
-      snapshots.push({action:'out',itemId:item.id,itemName:item.name,
+      snapshots.push({lid:makeLogId(),action:'out',itemId:item.id,itemName:item.name,
         employee:item.employee,job:item.job||'—',time:now,isoTime:isoNow,checkpoint:true});
     }
     if (item.type === 'bulk' && item.allocations && item.allocations.length) {
       item.allocations.forEach(function(a) {
-        snapshots.push({action:'bulk-out',itemId:item.id,itemName:item.name,
+        snapshots.push({lid:makeLogId(),action:'bulk-out',itemId:item.id,itemName:item.name,
           employee:a.employee,qty:a.qty,shed:a.shed||'',time:now,isoTime:isoNow,checkpoint:true});
       });
     }
   });
   db.log = snapshots;
+  db.logClearedAt = isoNow;
   saveCloudDebounced(); renderLog(); toast('Log cleared');
 }
 
@@ -1658,8 +1736,8 @@ function doExport(type) {
 }
 
 // ─── QR Code ───────────────────────────────────────────────────────────────
-function showQR(idx) {
-  var item=db.items[parseInt(idx)]; if(!item) return;
+function showQR(itemId) {
+  var item=db.items.filter(function(x){return x.id===itemId;})[0]; if(!item) return;
   document.getElementById('qr-title').textContent=item.name;
   document.getElementById('qr-sub').textContent='ID: '+item.id;
   var d=document.getElementById('qr-display'); d.innerHTML='<div style="color:#888;font-size:13px;padding:10px">Generating...</div>';
@@ -1778,7 +1856,7 @@ function parseCSVLine(line) {
 function confirmCSVImport() {
   if (!csvPendingItems.length) return;
   csvPendingItems.forEach(function(item) {
-    db.items.push({ id: item.id, name: item.name, colour: item.colour, status: 'in', employee: null, job: null, since: null });
+    db.items.push({ id: item.id, name: item.name, colour: item.colour, status: 'in', employee: null, job: null, since: null, createdAt: new Date().toISOString() });
   });
   saveCloudDebounced(); renderItems(); renderBkForm(); updateHdr();
   toast(csvPendingItems.length + ' items imported ✓');
@@ -1979,20 +2057,33 @@ function saveEmpEdit() {
   var canBook = document.getElementById('edit-emp-can-book').value === 'true';
   if (!newName) { toast('⚠ Name cannot be empty.'); return; }
   var oldName = emp.name;
-  emp.name = newName;
+  if (newName !== oldName) {
+    if (db.employees.some(function(e,i){ return i!==idx && e.name.toLowerCase()===newName.toLowerCase(); })) { toast('⚠ Employee already exists.'); return; }
+    // Rename = tombstone the old name + a new employee record. Equipment they hold is returned under the
+    // old name and taken out again under the new one, so replay can't double-count.
+    var nowD = new Date(), nowIso = nowD.toISOString();
+    releaseEmployeeEquipment(oldName, newName);
+    var moved = [];
+    db.bookings.forEach(function(b) {
+      if (b.employee === oldName && b.status === 'active') {
+        b.status = 'cancelled';
+        var nb = JSON.parse(JSON.stringify(b)); nb.status = 'active'; nb.employee = newName;
+        nb.id = String(nowD.getTime() + moved.length + 1); nb.createdAt = nowIso; moved.push(nb);
+      }
+    });
+    moved.forEach(function(nb){ db.bookings.push(nb); });
+    addTombstone('deletedEmployees','name',oldName,nowIso);
+    emp.name = newName; emp.createdAt = nowIso;
+  }
   emp.canBook = canBook;
-  // Update references in items and log
-  db.items.forEach(function(i) { if (i.employee === oldName) i.employee = newName; });
-  db.log.forEach(function(l) { if (l.employee === oldName) l.employee = newName; if (l.fromEmployee === oldName) l.fromEmployee = newName; });
-  db.bookings.forEach(function(b) { if (b.employee === oldName) b.employee = newName; });
   db.employees.sort(function(a,b){return a.name.localeCompare(b.name);});
   saveCloudDebounced(); renderEmps(); renderScanEmps(); renderBkForm(); closeModal('modal-edit-emp'); toast('Employee updated ✓');
 }
 
 // ─── Edit Item ──────────────────────────────────────────────────────────────
-function editItem(idx) {
-  var item = db.items[parseInt(idx)]; if (!item) return;
-  document.getElementById('edit-item-idx').value = idx;
+function editItem(itemId) {
+  var item = db.items.filter(function(x){return x.id===itemId;})[0]; if (!item) return;
+  document.getElementById('edit-item-idx').value = itemId;
   document.getElementById('edit-item-name').value = item.name;
   document.getElementById('edit-item-id').value = item.id;
   renderCatDropdown('edit-item-cat', item.category||'');
@@ -2025,8 +2116,8 @@ function getEditColour() {
 }
 
 function saveItemEdit() {
-  var idx = parseInt(document.getElementById('edit-item-idx').value);
-  var item = db.items[idx]; if (!item) return;
+  var itemId = document.getElementById('edit-item-idx').value;
+  var item = db.items.filter(function(x){return x.id===itemId;})[0]; if (!item) return;
   var newName = document.getElementById('edit-item-name').value.trim();
   var newId = document.getElementById('edit-item-id').value.trim();
   var newColour = getEditColour();
@@ -2085,7 +2176,8 @@ function downloadBackup() {
     version: db.version||0,
     exportedAt: new Date().toISOString(),
     items: db.items, employees: db.employees, bookings: db.bookings,
-    log: db.log, flags: db.flags, categories: db.categories
+    log: db.log, flags: db.flags, categories: db.categories,
+    deletedItems: db.deletedItems||[], deletedEmployees: db.deletedEmployees||[], logClearedAt: db.logClearedAt||null
   };
   var blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
   var url = URL.createObjectURL(blob);
@@ -2118,8 +2210,8 @@ function restoreBackup(input) {
 
 function closeModal(id) { document.getElementById(id).classList.remove('open'); if(id==='modal-confirm') pendingAction=null; }
 
-function showItemLog(idx) {
-  var item = db.items[parseInt(idx)]; if (!item) return;
+function showItemLog(itemId) {
+  var item = db.items.filter(function(x){return x.id===itemId;})[0]; if (!item) return;
   document.getElementById('item-log-title').textContent = item.name + ' — History';
   var entries = db.log.filter(function(e) { return e.itemId === item.id; }).slice().sort(function(a,b){
     return logTs(b) - logTs(a); // newest first
