@@ -302,6 +302,7 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
       </div>
     </div>
 
+    <input type="search" id="item-search" placeholder="Search items by name, ID, category or who has it…" oninput="renderItems()" autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:16px;border:1px solid #ddd;border-radius:8px;margin:4px 0 6px;font-family:inherit">
     <div id="items-list"></div>
   </div>
 
@@ -1404,6 +1405,7 @@ function addItem() {
       localStorage.setItem('cat-open-'+newCatId, 'true');
     } catch(se) {}
     setItemType('single');
+    var sq=document.getElementById('item-search'); if(sq) sq.value='';
     saveCloudDebounced(); renderItems(); renderBkForm(); updateHdr(); toast('Item added ✓');
   } catch(e) {
     console.error('addItem failed:', e);
@@ -1521,6 +1523,8 @@ function renderItems() {
   }
   if(!db.items.length){el.innerHTML='<div class="empty">No items yet.'+(IS_ADMIN?' Add one above.':'')+'</div>';return;}
   var t=todayStr(),html='';
+  var qRaw=(document.getElementById('item-search')||{value:''}).value.trim();
+  var qWords=qRaw.toLowerCase().split(/\s+/).filter(Boolean), shownCount=0;
   // Group by category
   var cats = [];
   db.items.forEach(function(item) { var c=item.category||''; if(cats.indexOf(c)===-1) cats.push(c); });
@@ -1528,9 +1532,18 @@ function renderItems() {
   cats.sort(function(a,b) { if(!a&&b) return 1; if(a&&!b) return -1; return a.localeCompare(b); });
   cats.forEach(function(cat) {
     var catItems = db.items.map(function(item,i){return{item:item,i:i};}).filter(function(x){return (x.item.category||'')=== cat;});
+    // Display-only: alphabetical by name (numbers sort naturally: Ladder 2 before Ladder 10). db.items order is untouched.
+    catItems.sort(function(a,b){ return (a.item.name||'').localeCompare(b.item.name||'', undefined, {numeric:true, sensitivity:'base'}); });
+    // Search: every word must appear in name / id / category / who has it
+    if (qWords.length) catItems = catItems.filter(function(x){
+      var hay = ((x.item.name||'')+' '+(x.item.id||'')+' '+(x.item.category||'')+' '+(x.item.employee||'')).toLowerCase();
+      return qWords.every(function(w){ return hay.indexOf(w) !== -1; });
+    });
+    if (qWords.length && !catItems.length) return;
+    shownCount += catItems.length;
     var catLabel = cat || 'Uncategorised';
     var catId = 'cat-' + catLabel.replace(/[^a-zA-Z0-9]/g,'-');
-    var isOpen = localStorage.getItem('cat-open-'+catId) !== 'false'; // default open
+    var isOpen = qWords.length ? true : localStorage.getItem('cat-open-'+catId) !== 'false'; // default open; while searching, show all matches
     html += '<div style="margin:10px 0 4px">'
       +'<button data-catid="'+catId+'" onclick="toggleCat(this.dataset.catid)" style="width:100%;text-align:left;background:#f0f0f0;border:none;border-radius:8px;padding:8px 12px;font-family:Arial,sans-serif;font-size:12px;font-weight:700;color:#555;cursor:pointer;display:flex;justify-content:space-between;align-items:center;text-transform:uppercase;letter-spacing:.5px">'
       +esc(catLabel)
@@ -1585,6 +1598,7 @@ function renderItems() {
     }
     html += '</div>'; // close category div
   });
+  if (qWords.length && !shownCount) html = '<div class="empty">No items match “'+esc(qRaw)+'”.</div>';
   el.innerHTML=html;
 }
 
