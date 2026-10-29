@@ -95,6 +95,13 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:10px 20px;border-radius:20px;font-size:13px;font-weight:700;font-family:Arial,sans-serif;z-index:9999;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;max-width:90vw;text-align:center}
 .toast.show{opacity:1}
 @media(max-width:400px){.g2{grid-template-columns:1fr}}
+
+.sugg{position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1px solid #ccc;border-radius:8px;margin-top:2px;max-height:240px;overflow-y:auto;box-shadow:0 4px 14px rgba(0,0,0,.15)}
+.sugg-item{padding:10px 12px;font-size:15px;border-bottom:1px solid #f0f0f0;cursor:pointer}
+.sugg-item:last-child{border-bottom:none}.sugg-item:active,.sugg-item:hover{background:#f3f3f3}
+.sugg-item small{display:block;color:#888;font-size:12px;margin-top:1px}
+.sugg-empty{padding:10px 12px;font-size:14px;color:#999}
+#scan-emp-search.picked{border-color:#27ae60;background:#f4fbf6}
 </style>
 </head>
 <body>
@@ -130,7 +137,11 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
     <div class="card">
       <div class="field">
         <label>Employee</label>
-        <select id="scan-emp"><option value="">Select employee...</option></select>
+        <div style="position:relative">
+          <input type="search" id="scan-emp-search" placeholder="Start typing your name…" autocomplete="off" autocapitalize="words" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:16px;border:1px solid #ddd;border-radius:8px;font-family:inherit">
+          <div class="sugg" id="scan-emp-sugg" style="display:none"></div>
+        </div>
+        <select id="scan-emp" style="display:none"><option value="">Select employee...</option></select>
       </div>
     </div>
     <div class="scan-box" id="scan-trigger" onclick="startScan()">
@@ -149,10 +160,13 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
       </div>
     </div>
     <div class="divider"></div>
-    <div style="font-size:12px;font-weight:700;color:#888;margin-bottom:8px">Or enter item ID manually</div>
+    <div style="font-size:12px;font-weight:700;color:#888;margin-bottom:8px">Or type an item name or ID</div>
     <div class="row">
-      <input type="text" id="manual-code" placeholder="Item ID...">
-      <button class="btn primary sm" onclick="processCode(document.getElementById('manual-code').value.trim())">Go</button>
+      <div style="position:relative;flex:1;min-width:0">
+        <input type="text" id="manual-code" placeholder="Type item name or ID..." autocomplete="off" style="width:100%;box-sizing:border-box">
+        <div class="sugg" id="scan-item-sugg" style="display:none"></div>
+      </div>
+      <button class="btn primary sm" onclick="goManual()">Go</button>
     </div>
     <div id="scan-result" style="display:none;margin-top:12px"></div>
     <div class="divider"></div>
@@ -984,7 +998,88 @@ function renderScanEmps() {
   var sel = document.getElementById('scan-emp'), cur = sel.value;
   sel.innerHTML = '<option value="">Select employee...</option>';
   db.employees.forEach(function(e) { var o = document.createElement('option'); o.value = e.name; o.textContent = e.name; if (e.name === cur) o.selected = true; sel.appendChild(o); });
+  var inp = document.getElementById('scan-emp-search');
+  if (inp) {
+    if (sel.value) { inp.value = sel.value; inp.classList.add('picked'); }
+    else if (cur) { inp.value = ''; inp.classList.remove('picked'); }   // the selected employee no longer exists
+  }
 }
+
+// ── Scan page type-ahead (the hidden #scan-emp select stays the source of truth) ──
+function _sWords(q) { return (q||'').toLowerCase().split(/\s+/).filter(Boolean); }
+function _sHide(id) { var el = document.getElementById(id); if (el) el.style.display = 'none'; }
+function scanEmpMatches(all) {
+  var inp = document.getElementById('scan-emp-search'), w = all ? [] : _sWords(inp.value);
+  return db.employees.filter(function(e){ var n=(e.name||'').toLowerCase(); return w.every(function(x){ return n.indexOf(x) !== -1; }); })
+    .sort(function(a,b){ return a.name.localeCompare(b.name, undefined, {sensitivity:'base'}); });
+}
+function scanEmpShow(all) {
+  var box = document.getElementById('scan-emp-sugg'), list = scanEmpMatches(all);
+  box.innerHTML = '';
+  if (!list.length) { var d0 = document.createElement('div'); d0.className = 'sugg-empty'; d0.textContent = 'No employee found'; box.appendChild(d0); }
+  list.forEach(function(e) { var d = document.createElement('div'); d.className = 'sugg-item'; d.dataset.name = e.name; d.textContent = e.name; box.appendChild(d); });
+  box.style.display = 'block';
+}
+function scanEmpPick(name) {
+  var sel = document.getElementById('scan-emp'), inp = document.getElementById('scan-emp-search');
+  sel.value = name;
+  if (sel.value !== name) { toast('⚠ That employee is no longer in the list.'); scanEmpShow(false); return; }
+  inp.value = name; inp.classList.add('picked'); _sHide('scan-emp-sugg');
+}
+// exact (case-insensitive) name wins; otherwise a single match
+function scanEmpAutoPick() {
+  var inp = document.getElementById('scan-emp-search'), v = inp.value.trim().toLowerCase();
+  if (!v || document.getElementById('scan-emp').value) return;
+  var all = scanEmpMatches(false);
+  var exact = all.filter(function(e){ return e.name.toLowerCase() === v; })[0];
+  if (exact) scanEmpPick(exact.name); else if (all.length === 1) scanEmpPick(all[0].name);
+}
+function scanItemMatches(q) {
+  var w = _sWords(q);
+  return db.items.filter(function(i){ var h=((i.name||'')+' '+(i.id||'')+' '+(i.category||'')).toLowerCase(); return w.every(function(x){ return h.indexOf(x) !== -1; }); })
+    .sort(function(a,b){ return (a.name||'').localeCompare(b.name||'', undefined, {numeric:true, sensitivity:'base'}); });
+}
+function scanItemShow() {
+  var inp = document.getElementById('manual-code'), box = document.getElementById('scan-item-sugg'), q = inp.value.trim();
+  if (!q) { box.style.display = 'none'; return; }
+  var list = scanItemMatches(q).slice(0, 8);
+  box.innerHTML = '';
+  if (!list.length) { var d0 = document.createElement('div'); d0.className = 'sugg-empty'; d0.textContent = 'No matching item'; box.appendChild(d0); }
+  list.forEach(function(i) {
+    var d = document.createElement('div'); d.className = 'sugg-item'; d.dataset.id = i.id;
+    d.appendChild(document.createTextNode(i.name || i.id));
+    var sm = document.createElement('small'), st;
+    if (i.type === 'bulk') { var out = (i.allocations||[]).reduce(function(t,a){ return t + a.qty; }, 0); st = Math.max(0,(i.totalQty||0) - out) + ' available'; }
+    else st = i.status === 'out' ? 'Out: ' + (i.employee || '?') : 'Available';
+    sm.textContent = i.id + ' · ' + st; d.appendChild(sm); box.appendChild(d);
+  });
+  box.style.display = 'block';
+}
+function goManual() {
+  var inp = document.getElementById('manual-code'), v = inp.value.trim();
+  if (!v) return;
+  _sHide('scan-item-sugg');
+  var exact = db.items.filter(function(i){ return (i.id||'').toLowerCase() === v.toLowerCase(); })[0];
+  if (exact) { processCode(exact.id); return; }
+  var m = scanItemMatches(v);
+  if (m.length === 1) { processCode(m[0].id); return; }
+  if (m.length > 1) { toast('⚠ Several items match - tap one in the list.'); scanItemShow(); inp.focus({preventScroll:true}); return; }
+  processCode(v);   // no match: shows the normal "Item not found"
+}
+(function() {
+  var ei = document.getElementById('scan-emp-search'), eb = document.getElementById('scan-emp-sugg');
+  ei.addEventListener('focus', function(){ scanEmpShow(!!document.getElementById('scan-emp').value); });
+  ei.addEventListener('input', function(){ document.getElementById('scan-emp').value = ''; ei.classList.remove('picked'); scanEmpShow(false); });
+  ei.addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); scanEmpAutoPick(); _sHide('scan-emp-sugg'); } else if (e.key === 'Escape') _sHide('scan-emp-sugg'); });
+  ei.addEventListener('blur', function(){ setTimeout(function(){ scanEmpAutoPick(); _sHide('scan-emp-sugg'); }, 150); });
+  eb.addEventListener('mousedown', function(e){ e.preventDefault(); });
+  eb.addEventListener('click', function(e){ var t = e.target.closest ? e.target.closest('.sugg-item') : null; if (t) scanEmpPick(t.dataset.name); });
+  var ii = document.getElementById('manual-code'), ib = document.getElementById('scan-item-sugg');
+  ii.addEventListener('input', scanItemShow);
+  ii.addEventListener('blur', function(){ setTimeout(function(){ if (document.activeElement !== ii) _sHide('scan-item-sugg'); }, 150); });
+  ib.addEventListener('mousedown', function(e){ e.preventDefault(); });
+  ib.addEventListener('click', function(e){ var t = e.target.closest ? e.target.closest('.sugg-item') : null; if (t) { _sHide('scan-item-sugg'); processCode(t.dataset.id); } });
+})();
 
 function startScan() {
   if (!navigator.mediaDevices) { alert('Camera not available.'); return; }
@@ -2333,7 +2428,7 @@ function showItemLog(itemId) {
 }
 document.querySelectorAll('.modal-bg').forEach(function(m) { m.addEventListener('click',function(e){if(e.target===this)closeModal(this.id);}); });
 document.getElementById('new-emp').addEventListener('keydown',function(e){if(e.key==='Enter')addEmp();});
-document.getElementById('manual-code').addEventListener('keydown',function(e){if(e.key==='Enter')processCode(e.target.value.trim());});
+document.getElementById('manual-code').addEventListener('keydown',function(e){if(e.key==='Enter')goManual();});
 
 // ─── Boot ──────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', function() {
