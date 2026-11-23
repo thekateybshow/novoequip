@@ -100,8 +100,9 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
 .sugg-item{padding:10px 12px;font-size:15px;border-bottom:1px solid #f0f0f0;cursor:pointer}
 .sugg-item:last-child{border-bottom:none}.sugg-item:active,.sugg-item:hover{background:#f3f3f3}
 .sugg-item small{display:block;color:#888;font-size:12px;margin-top:1px}
+.sugg-wide{right:auto;min-width:100%;width:max-content;max-width:min(92vw,420px)}
 .sugg-empty{padding:10px 12px;font-size:14px;color:#999}
-#scan-emp-search.picked{border-color:#27ae60;background:#f4fbf6}
+#scan-emp-search.picked,#bk-item-search.picked{border-color:#27ae60;background:#f4fbf6}
 </style>
 </head>
 <body>
@@ -191,7 +192,12 @@ h2{font-size:15px;font-weight:700;margin-bottom:12px}
     <h2>Book an item</h2>
     <div class="card">
       <div class="g2" style="margin-bottom:10px">
-        <div class="field"><label>Item</label><select id="bk-item"><option value="">Select...</option></select></div>
+        <div class="field"><label>Item</label>
+          <div style="position:relative">
+            <input type="search" id="bk-item-search" placeholder="Type item name or ID…" autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:16px;border:1px solid #ddd;border-radius:8px;font-family:inherit">
+            <div class="sugg sugg-wide" id="bk-item-sugg" style="display:none"></div>
+          </div>
+          <select id="bk-item" style="display:none"><option value="">Select...</option></select></div>
         <div class="field"><label>Employee</label><select id="bk-emp"><option value="">Select...</option></select></div>
       </div>
       <div class="g2" style="margin-bottom:10px">
@@ -1055,6 +1061,47 @@ function scanItemShow() {
   });
   box.style.display = 'block';
 }
+// ── Booking form: item type-ahead (hidden #bk-item select stays the source of truth) ──
+function bkItemLabel(i) { return (i.name || i.id) + ' (' + i.id + ')'; }
+function bkItemShow(all) {
+  var inp = document.getElementById('bk-item-search'), box = document.getElementById('bk-item-sugg');
+  var list = all ? db.items.slice().sort(function(a,b){ return (a.name||'').localeCompare(b.name||'', undefined, {numeric:true, sensitivity:'base'}); }) : scanItemMatches(inp.value);
+  box.innerHTML = '';
+  if (!list.length) { var d0 = document.createElement('div'); d0.className = 'sugg-empty'; d0.textContent = 'No matching item'; box.appendChild(d0); }
+  list.forEach(function(i) {
+    var d = document.createElement('div'); d.className = 'sugg-item'; d.dataset.id = i.id;
+    d.appendChild(document.createTextNode(i.name || i.id));
+    var sm = document.createElement('small');
+    sm.textContent = i.id + ' · ' + (i.type === 'bulk' ? 'Bulk' : (i.status === 'out' ? 'Out: ' + (i.employee || '?') : 'Available'));
+    d.appendChild(sm); box.appendChild(d);
+  });
+  box.style.display = 'block';
+}
+function bkItemPick(id) {
+  var sel = document.getElementById('bk-item'), inp = document.getElementById('bk-item-search');
+  sel.value = id;
+  if (sel.value !== id) { toast('⚠ That item is no longer in the list.'); bkItemShow(false); return; }
+  var it = db.items.filter(function(x){ return x.id === id; })[0];
+  inp.value = it ? bkItemLabel(it) : id; inp.classList.add('picked'); _sHide('bk-item-sugg');
+}
+// exact ID, exact name, or a single match
+function bkItemAutoPick() {
+  var inp = document.getElementById('bk-item-search'), v = inp.value.trim().toLowerCase();
+  if (!v || document.getElementById('bk-item').value) return;
+  var m = scanItemMatches(v);
+  var exact = m.filter(function(i){ return (i.id||'').toLowerCase() === v || (i.name||'').toLowerCase() === v; });
+  if (exact.length === 1) bkItemPick(exact[0].id); else if (m.length === 1) bkItemPick(m[0].id);
+}
+(function() {
+  var bi = document.getElementById('bk-item-search'), bb = document.getElementById('bk-item-sugg');
+  bi.addEventListener('focus', function(){ bkItemShow(!!document.getElementById('bk-item').value || !bi.value.trim()); });
+  bi.addEventListener('input', function(){ document.getElementById('bk-item').value = ''; bi.classList.remove('picked'); bkItemShow(!bi.value.trim()); });
+  bi.addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); bkItemAutoPick(); _sHide('bk-item-sugg'); } else if (e.key === 'Escape') _sHide('bk-item-sugg'); });
+  bi.addEventListener('blur', function(){ setTimeout(function(){ bkItemAutoPick(); _sHide('bk-item-sugg'); }, 150); });
+  bb.addEventListener('mousedown', function(e){ e.preventDefault(); });
+  bb.addEventListener('click', function(e){ var t = e.target.closest ? e.target.closest('.sugg-item') : null; if (t) bkItemPick(t.dataset.id); });
+})();
+
 function goManual() {
   var inp = document.getElementById('manual-code'), v = inp.value.trim();
   if (!v) return;
@@ -1363,6 +1410,11 @@ function renderBkForm() {
     var opt='<option value="'+esc(i.id)+'"'+(i.id===curItem?' selected':'')+'>'+esc(i.name)+' ('+esc(i.id)+')'+status+'</option>';
     bi.innerHTML+=opt;
   });
+  var bsi=document.getElementById('bk-item-search');
+  if (bsi) {
+    if (bi.value) { var bit=db.items.filter(function(x){return x.id===bi.value;})[0]; bsi.value=bit?(bit.name+' ('+bit.id+')'):''; bsi.classList.add('picked'); }
+    else if (curItem) { bsi.value=''; bsi.classList.remove('picked'); }   // the picked item no longer exists
+  }
   be.innerHTML='<option value="">Select...</option>';
   db.employees.forEach(function(e){
     var canBook = e.canBook !== false;
@@ -1382,6 +1434,7 @@ function addBooking() {
   var itemId=document.getElementById('bk-item').value,emp=document.getElementById('bk-emp').value;
   var from=document.getElementById('bk-from').value,to=document.getElementById('bk-to').value;
   var job=document.getElementById('bk-job').value.trim();
+  if(!itemId&&((document.getElementById('bk-item-search')||{}).value||'').trim()){toast('⚠ Tap an item in the list to choose it.'); return;}
   if(!itemId||!emp||!from||!to){toast('⚠ Please fill in all fields.'); return;}
   // Check if selected employee has booking permission
   var empObj=db.employees.filter(function(e){return e.name===emp;})[0];
@@ -1397,6 +1450,7 @@ function addBooking() {
   db.bookings.push({id:Date.now().toString(),itemId:itemId,itemName:item.name,employee:emp,from:from,to:to,job:job||'—',status:'active',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),created:new Date().toLocaleString('en-AU', { timeZone:'Australia/Sydney' })});
   // Clear form after successful booking
   document.getElementById('bk-item').value='';
+  var bsc=document.getElementById('bk-item-search'); if(bsc){bsc.value=''; bsc.classList.remove('picked');}
   document.getElementById('bk-emp').value='';
   document.getElementById('bk-from').value=todayStr();
   document.getElementById('bk-to').value=todayStr();
